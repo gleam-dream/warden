@@ -37,12 +37,13 @@ packages = [
   { name = "splitter", version = "1.3.0", build_tools = ["gleam"], requirements = ["gleam_stdlib"], otp_app = "splitter", source = "hex", outer_checksum = "8F1485306E0D59168A39E12ED8844F9F616EC59C3C63AFCFDAE04DBD68690CBC" },
   { name = "telemetry", version = "1.4.2", build_tools = ["rebar3"], requirements = [], otp_app = "telemetry", source = "hex", outer_checksum = "928F6495066506077862C0D1646609EED891A4326BEE3126BA54B60AF61FEBB1" },
   { name = "telemetry_registry", version = "0.3.2", build_tools = ["rebar3", "mix"], requirements = ["telemetry"], otp_app = "telemetry_registry", source = "hex", outer_checksum = "E7ED191EB1D115A3034AF8E1E35E4E63D5348851D556646D46CA3D1B4E16BAB9" },
-  { name = "warden", version = "0.1.0", build_tools = ["gleam"], requirements = ["exception", "gleam_crypto", "gleam_erlang", "gleam_json", "gleam_otp", "gleam_stdlib", "gleam_time", "gose", "jose", "kryptos", "oidcc", "sinal", "telemetry", "telemetry_registry"], source = "local", path = ".." },
+  { name = "warden", version = "0.1.0", build_tools = ["gleam"], requirements = ["exception", "gleam_crypto", "gleam_erlang", "gleam_json", "gleam_otp", "gleam_stdlib", "gleam_time", "gose", "kryptos", "sinal", "telemetry"], source = "local", path = ".." },
   { name = "wisp", version = "2.2.2", build_tools = ["gleam"], requirements = ["directories", "exception", "filepath", "gleam_crypto", "gleam_erlang", "gleam_http", "gleam_json", "gleam_stdlib", "houdini", "logging", "marceau", "mist", "simplifile"], otp_app = "wisp", source = "hex", outer_checksum = "5FF5F1E288C3437252ABB93D8F9CF42FF652CE7AD54480CFE736038DC09C4F22" },
 ]
 
 [requirements]
 envoy = { version = ">= 1.0.0 and < 2.0.0" }
+gleam_crypto = { version = ">= 1.6.0 and < 2.0.0" }
 gleam_erlang = { version = ">= 1.0.0 and < 2.0.0" }
 gleam_http = { version = ">= 4.4.0 and < 5.0.0" }
 gleam_json = { version = ">= 3.0.0 and < 4.0.0" }

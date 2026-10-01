@@ -107,6 +107,7 @@ pub fn main() -> Nil {
       response_mode:,
       login_lifetime: config.login_lifetime_seconds(validated),
       post_logout_redirect_uri: base_url <> "/logged-out",
+      origin: base_url,
     )
   let port = env("PORT", "18080") |> int.parse |> result.unwrap(18_080)
   let server =

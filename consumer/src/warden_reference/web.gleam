@@ -1,9 +1,10 @@
 //// Reference relying party routes. Public Warden imports only.
 
 import gleam/bit_array
+import gleam/crypto
 import gleam/dynamic/decode
+import gleam/erlang/atom
 import gleam/http
-import gleam/http/cookie
 import gleam/http/response
 import gleam/list
 import gleam/option.{type Option, None, Some}
@@ -11,6 +12,7 @@ import gleam/result
 import gleam/string
 import warden
 import warden/config
+import warden_reference/protect
 import wisp.{type Request, type Response}
 
 pub type Context {
@@ -20,15 +22,24 @@ pub type Context {
     response_mode: config.ResponseMode,
     login_lifetime: Int,
     post_logout_redirect_uri: String,
+    /// This application's origin, for the same-origin check on POSTs.
+    origin: String,
   )
 }
 
-const binding_cookie = "warden_binding"
+const binding_cookie = protect.binding_cookie
 
-const session_cookie = "warden_session"
+const session_cookie = protect.session_cookie
+
+/// Server-side session lifetime, also the session cookie's Max-Age.
+const session_max_age = 3600
 
 pub fn handle(request: Request, context: Context) -> Response {
   use <- wisp.rescue_crashes
+  protect.security_headers(route(request, context))
+}
+
+fn route(request: Request, context: Context) -> Response {
   case request.method, wisp.path_segments(request) {
     http.Get, [] -> home(request, context)
     http.Get, ["login"] -> login(request, context, None)
@@ -39,10 +50,16 @@ pub fn handle(request: Request, context: Context) -> Response {
       use body <- wisp.require_string_body(request)
       callback(request, context, warden.FormPostCallback(body))
     }
-    http.Post, ["refresh"] -> refresh(request, context)
+    http.Post, ["refresh"] -> {
+      use <- same_origin(request, context)
+      refresh(request, context)
+    }
     http.Get, ["userinfo"] -> userinfo(request, context)
-    http.Get, ["client-token"] -> client_token(context)
-    http.Post, ["logout"] -> logout(request, context)
+    http.Get, ["client-token"] -> client_token(request, context)
+    http.Post, ["logout"] -> {
+      use <- same_origin(request, context)
+      logout(request, context)
+    }
     http.Get, ["logged-out"] ->
       page(200, "Signed out", "<p>You are signed out.</p>")
     http.Get, ["health"] -> wisp.ok()
@@ -50,6 +67,19 @@ pub fn handle(request: Request, context: Context) -> Response {
     // route exists only so logout plans accept the client configuration.
     http.Get, ["frontchannel-logout"] -> wisp.ok()
     _, _ -> wisp.not_found()
+  }
+}
+
+/// Refuse state-changing requests that do not come from this application's
+/// own pages (cross-site request forgery).
+fn same_origin(
+  request: Request,
+  context: Context,
+  next: fn() -> Response,
+) -> Response {
+  case protect.same_origin(request, context.origin) {
+    True -> next()
+    False -> page(403, "Forbidden", "<p>Cross-site request refused.</p>")
   }
 }
 
@@ -68,7 +98,7 @@ fn login(request: Request, context: Context, hint: Option(String)) -> Response {
   case warden.begin_login(context.client, binding, options) {
     Ok(redirect) ->
       wisp.redirect(redirect.url)
-      |> set_binding(request, context, redirect.browser_binding)
+      |> set_binding(context, redirect.browser_binding)
     Error(error) ->
       page(503, "Sign-in unavailable", escape(string.inspect(error)))
   }
@@ -112,12 +142,19 @@ fn callback(
       case warden.userinfo(context.client, session) {
         Ok(_) | Error(warden.UserinfoNotSupported) ->
           wisp.redirect("/")
-          |> wisp.set_cookie(
-            request,
+          |> response.set_cookie(
             session_cookie,
-            warden.session_reference(session),
-            wisp.Signed,
-            3600,
+            wisp.sign_message(
+              request,
+              <<
+                protect.session_value(
+                  warden.session_reference(session),
+                  issued_at: now_seconds(),
+                ):utf8,
+              >>,
+              crypto.Sha512,
+            ),
+            protect.session_attributes(session_max_age),
           )
         Error(error) -> {
           let _ = warden.logout(context.client, session, no_redirect())
@@ -178,13 +215,21 @@ fn failure_page(failure: AppFailure) -> Response {
 // --- Session -----------------------------------------------------------------
 
 fn session(request: Request, context: Context) -> Result(warden.Session, Nil) {
-  use reference <- result.try(wisp.get_cookie(
-    request,
-    session_cookie,
-    wisp.Signed,
+  use value <- result.try(wisp.get_cookie(request, session_cookie, wisp.Signed))
+  use reference <- result.try(protect.read_session_value(
+    value,
+    now: now_seconds(),
+    max_age: session_max_age,
   ))
   warden.restore_session(context.client, reference) |> result.replace_error(Nil)
 }
+
+fn now_seconds() -> Int {
+  system_time(atom.create("second"))
+}
+
+@external(erlang, "erlang", "system_time")
+fn system_time(unit: atom.Atom) -> Int
 
 /// A caller-owned claim type decoded from verified ID-token claims.
 pub type Profile {
@@ -288,7 +333,10 @@ fn userinfo(request: Request, context: Context) -> Response {
   }
 }
 
-fn client_token(context: Context) -> Response {
+/// Signed-in users only: an anonymous route would let anyone spend the
+/// client's credentials at the provider.
+fn client_token(request: Request, context: Context) -> Response {
+  use <- signed_in(request, context)
   case warden.client_credentials(context.client, []) {
     Ok(token) ->
       wisp.json_response(
@@ -302,9 +350,25 @@ fn client_token(context: Context) -> Response {
   }
 }
 
+fn signed_in(
+  request: Request,
+  context: Context,
+  next: fn() -> Response,
+) -> Response {
+  case session(request, context) {
+    Ok(_) -> next()
+    Error(Nil) -> wisp.response(401)
+  }
+}
+
 fn logout(request: Request, context: Context) -> Response {
   let cleared = fn(response) {
-    wisp.set_cookie(response, request, session_cookie, "", wisp.Signed, 0)
+    response.set_cookie(
+      response,
+      session_cookie,
+      "",
+      protect.session_attributes(0),
+    )
   }
   case session(request, context) {
     Error(Nil) -> wisp.redirect("/logged-out") |> cleared
@@ -331,33 +395,16 @@ fn no_redirect() -> warden.LogoutOptions {
 
 // --- Cookies and pages ---------------------------------------------------------
 
-/// The browser binding must survive the provider's redirect or cross-site
-/// form post: `SameSite=Lax` suffices for query responses; form-post needs
-/// `SameSite=None; Secure`.
 fn set_binding(
   response: Response,
-  request: Request,
   context: Context,
   binding: warden.BrowserBinding,
 ) -> Response {
-  let secure = request.scheme == http.Https
-  let same_site = case context.response_mode {
-    config.FormPost -> Some(cookie.None)
-    config.Query -> Some(cookie.Lax)
-  }
   response.set_cookie(
     response,
     binding_cookie,
     wisp_plain(warden.browser_binding_value(binding)),
-    cookie.Attributes(
-      // Outlive the transaction so an expired login is reported as expired.
-      max_age: Some(context.login_lifetime + 300),
-      domain: None,
-      path: Some("/"),
-      secure:,
-      http_only: True,
-      same_site:,
-    ),
+    protect.binding_attributes(context.response_mode, context.login_lifetime),
   )
 }
 

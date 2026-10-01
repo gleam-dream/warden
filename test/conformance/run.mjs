@@ -312,8 +312,10 @@ async function runModule(plan, planId, module) {
         }
         if (page.status === 200 && new URL(page.url).pathname === "/") {
           if (plan.refresh) {
+            // A browser form post carries its page's origin.
             const r = await browser.request(`${APP}/refresh`, {
               method: "POST",
+              headers: { origin: APP },
             });
             const text = await r.text();
             notes.push(
@@ -321,8 +323,10 @@ async function runModule(plan, planId, module) {
             );
           }
           if (plan.logout) {
+            // A browser form post carries its page's origin.
             const r = await browser.request(`${APP}/logout`, {
               method: "POST",
+              headers: { origin: APP },
             });
             const location = r.headers.get("location");
             notes.push(

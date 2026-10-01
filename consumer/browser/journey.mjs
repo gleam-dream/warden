@@ -84,8 +84,8 @@ await scenario(
     expect(department === "platform", `department ${department}`);
     expect(issuer === ISSUER, `issuer ${issuer}`);
     const cookies = await context.cookies();
-    const binding = cookies.find((c) => c.name === "warden_binding");
-    const session = cookies.find((c) => c.name === "warden_session");
+    const binding = cookies.find((c) => c.name === "__Host-warden_binding");
+    const session = cookies.find((c) => c.name === "__Host-warden_session");
     expect(
       binding?.httpOnly && binding?.secure && binding?.sameSite === "Lax",
       `binding cookie ${JSON.stringify(binding)}`,
@@ -249,7 +249,7 @@ await scenario(
       `callback ${JSON.stringify(callback?.method)}`,
     );
     const binding = (await context.cookies()).find(
-      (c) => c.name === "warden_binding",
+      (c) => c.name === "__Host-warden_binding",
     );
     expect(
       binding?.sameSite === "None" && binding?.secure,
