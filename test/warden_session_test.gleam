@@ -406,3 +406,61 @@ pub fn refresh_without_id_token_test() {
   warden.stop(client)
   support.provider_stop(provider)
 }
+
+/// A refresh whose dispatching process dies mid-request may already have
+/// reached the provider: the generation is quarantined, not left "in
+/// progress" forever (review finding F7).
+pub fn a_dispatcher_that_dies_quarantines_the_generation_test() {
+  let provider = support.provider_start(support.Standard)
+  let client = start(settings(provider))
+  let session = logged_in(provider, client)
+  support.script(
+    provider,
+    support.Refresh(refresh_token_of(provider)),
+    support.Delay(3000),
+  )
+  let dispatcher =
+    process.spawn_unlinked(fn() { warden.refresh_session(client, session) })
+  process.sleep(300)
+  process.kill(dispatcher)
+  process.sleep(100)
+  assert warden.refresh_session(client, session)
+    == Error(warden.RefreshQuarantined)
+  warden.stop(client)
+  support.provider_stop(provider)
+}
+
+/// The orphaned generation still accepts its own publication recovery: a
+/// handler may return RefreshPublicationUnresolved and exit before another
+/// process recovers it.
+pub fn publication_recovery_survives_the_dispatcher_test() {
+  let provider = support.provider_start(support.Standard)
+  let client =
+    start(config.Settings(..settings(provider), store_timeout_ms: 200))
+  let session = logged_in(provider, client)
+  let assert Ok(Nil) =
+    custody_store.delay_replies(
+      warden.custody_owner(client),
+      custody_store.DelayPublish,
+      500,
+    )
+  let handed_over = process.new_subject()
+  process.spawn_unlinked(fn() {
+    let assert Ok(warden.RefreshPublicationUnresolved(recovery)) =
+      warden.refresh_session(client, session)
+    process.send(handed_over, recovery)
+  })
+  let assert Ok(recovery) = process.receive(handed_over, 2000)
+  support.sleep(600)
+  let assert Ok(Nil) =
+    custody_store.delay_replies(
+      warden.custody_owner(client),
+      custody_store.DelayNothing,
+      0,
+    )
+  let assert Ok(warden.RefreshCompleted(refreshed)) =
+    warden.recover_refresh_publication(client, recovery)
+  assert warden.session_revision(refreshed) == 2
+  warden.stop(client)
+  support.provider_stop(provider)
+}

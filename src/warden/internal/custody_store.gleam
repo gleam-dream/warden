@@ -143,7 +143,12 @@ pub type SettleReply {
 
 type RefreshState {
   Idle
-  Outstanding(dispatch_id: Int, command_id: String)
+  /// A dispatch in flight; `holder` monitors the process performing it.
+  Outstanding(dispatch_id: Int, command_id: String, holder: process.Monitor)
+  /// The dispatching process died before settling: the provider may have
+  /// rotated the token. New reservations are refused as quarantined; the
+  /// dispatch's own publication recovery is still accepted.
+  Orphaned(dispatch_id: Int, command_id: String)
   Quarantined(command_id: String)
   Revoked
 }
@@ -167,6 +172,7 @@ pub opaque type Message(identity) {
     provider: String,
     revision: Int,
     command_id: String,
+    holder: process.Pid,
     reply: Subject(Reservation(identity)),
   )
   SettleMsg(
@@ -177,6 +183,7 @@ pub opaque type Message(identity) {
   )
   PublishMsg(Publish, Subject(PublishReply))
   RemoveMsg(String, Subject(Nil))
+  HolderDown(process.Down)
   DelayRepliesMsg(DelayedReply, Int, Subject(Nil))
 }
 
@@ -213,22 +220,37 @@ pub fn start(
   history_limit history_limit: Int,
   name name: process.Name(Message(identity)),
 ) -> actor.StartResult(Subject(Message(identity))) {
-  actor.new(
-    State(
-      entries: dict.new(),
-      installs: dict.new(),
-      install_order: fifo.new(),
-      horizon: None,
-      publications: dict.new(),
-      new_reference:,
-      next_dispatch: 1,
-      history_limit:,
-      reply_delay: #(DelayNothing, 0),
-    ),
-  )
+  actor.new_with_initialiser(1000, fn(self) {
+    // Receive DOWN messages for dispatching processes as well.
+    let selector =
+      process.new_selector()
+      |> process.select(self)
+      |> process.select_monitors(HolderDown)
+    actor.initialised(initial(new_reference, history_limit))
+    |> actor.selecting(selector)
+    |> actor.returning(self)
+    |> Ok
+  })
   |> actor.named(name)
   |> actor.on_message(handle)
   |> actor.start
+}
+
+fn initial(
+  new_reference: fn() -> String,
+  history_limit: Int,
+) -> State(identity) {
+  State(
+    entries: dict.new(),
+    installs: dict.new(),
+    install_order: fifo.new(),
+    horizon: None,
+    publications: dict.new(),
+    new_reference:,
+    next_dispatch: 1,
+    history_limit:,
+    reply_delay: #(DelayNothing, 0),
+  )
 }
 
 fn reply(
@@ -310,9 +332,9 @@ fn handle(
       reply(state, DelayNothing, subject, result)
       actor.continue(state)
     }
-    ReserveMsg(reference, provider, revision, command_id, subject) -> {
+    ReserveMsg(reference, provider, revision, command_id, holder, subject) -> {
       let #(result, state) =
-        reserve(state, reference, provider, revision, command_id)
+        reserve(state, reference, provider, revision, command_id, holder)
       reply(state, DelayNothing, subject, result)
       actor.continue(state)
     }
@@ -331,11 +353,26 @@ fn handle(
       reply(state, DelayNothing, subject, Nil)
       actor.continue(state)
     }
+    HolderDown(down) -> actor.continue(orphan(state, down))
     DelayRepliesMsg(kind, delay, subject) -> {
       process.send(subject, Nil)
       actor.continue(State(..state, reply_delay: #(kind, delay)))
     }
   }
+}
+
+/// The process holding a reservation died: orphan its generation.
+fn orphan(state: State(identity), down: process.Down) -> State(identity) {
+  let entries =
+    dict.map_values(state.entries, fn(_, entry) {
+      case entry.refresh {
+        Outstanding(dispatch_id:, command_id:, holder:)
+          if holder == down.monitor
+        -> Entry(..entry, refresh: Orphaned(dispatch_id:, command_id:))
+        _ -> entry
+      }
+    })
+  State(..state, entries:)
 }
 
 fn reserve(
@@ -344,6 +381,7 @@ fn reserve(
   provider: String,
   revision: Int,
   command_id: String,
+  holder: process.Pid,
 ) -> #(Reservation(identity), State(identity)) {
   case dict.get(state.entries, reference) {
     Error(Nil) -> #(ReservationMissing, state)
@@ -353,7 +391,7 @@ fn reserve(
     )
     Ok(entry) ->
       case entry.refresh {
-        Quarantined(_) -> #(ReservationQuarantined, state)
+        Quarantined(_) | Orphaned(..) -> #(ReservationQuarantined, state)
         Revoked -> #(ReservationRevoked, state)
         Outstanding(..) -> #(ReservationBusy, state)
         Idle if entry.revision != revision -> #(ReservationStale, state)
@@ -363,7 +401,14 @@ fn reserve(
             Some(refresh_token) -> {
               let dispatch_id = state.next_dispatch
               let entry =
-                Entry(..entry, refresh: Outstanding(dispatch_id, command_id))
+                Entry(
+                  ..entry,
+                  refresh: Outstanding(
+                    dispatch_id,
+                    command_id,
+                    process.monitor(holder),
+                  ),
+                )
               let dispatch =
                 Dispatch(
                   reference:,
@@ -396,9 +441,10 @@ fn settle(
   settlement: Settlement,
 ) -> #(SettleReply, State(identity)) {
   case dict.get(state.entries, reference) {
-    Ok(Entry(refresh: Outstanding(id, command_id), ..) as entry)
+    Ok(Entry(refresh: Outstanding(id, command_id, holder), ..) as entry)
       if id == dispatch_id
     -> {
+      process.demonitor_process(holder)
       let refresh = case settlement {
         SettleNotSent -> Idle
         SettleRejected -> Revoked
@@ -420,9 +466,14 @@ fn publish(
     Ok(receipt) -> #(Published(receipt), state)
     Error(Nil) ->
       case dict.get(state.entries, command.reference) {
-        Ok(Entry(refresh: Outstanding(id, _), ..) as entry)
+        Ok(Entry(refresh: Outstanding(dispatch_id: id, ..), ..) as entry)
+          | Ok(Entry(refresh: Orphaned(dispatch_id: id, ..), ..) as entry)
           if id == command.dispatch_id
         -> {
+          case entry.refresh {
+            Outstanding(holder:, ..) -> process.demonitor_process(holder)
+            _ -> Nil
+          }
           let update = command.update
           let tokens =
             Tokens(
@@ -539,11 +590,15 @@ pub fn reserve_refresh(
   revision: Int,
   command_id: String,
 ) -> Result(Reservation(identity), CallError) {
+  // The caller of reserve_refresh dispatches the request; the custody
+  // owner monitors it (call.call runs through a proxy process).
+  let holder = process.self()
   call.call(store.subject, store.timeout, ReserveMsg(
     reference,
     provider,
     revision,
     command_id,
+    holder,
     _,
   ))
 }

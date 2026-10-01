@@ -63,3 +63,43 @@ pub fn replay_after_eviction_is_refused_not_reinstalled_test() {
   // The original session is untouched.
   let assert Ok(Ok(_)) = custody.get(store, first.reference)
 }
+
+/// A reservation whose holder dies is orphaned: new reservations are
+/// refused as quarantined, and the dispatch's own publication is still
+/// accepted (finding F7).
+pub fn an_orphaned_reservation_accepts_only_its_publication_test() {
+  let store = start(100)
+  let assert Ok(custody.Installed(receipt)) =
+    custody.install(store, command("a", 1))
+  let reserved = process.new_subject()
+  let holder =
+    process.spawn_unlinked(fn() {
+      let assert Ok(custody.Reserved(dispatch)) =
+        custody.reserve_refresh(store, receipt.reference, "provider", 1, "r1")
+      process.send(reserved, dispatch)
+      process.sleep_forever()
+    })
+  let assert Ok(dispatch) = process.receive(reserved, 1000)
+  process.kill(holder)
+  process.sleep(50)
+  assert custody.reserve_refresh(store, receipt.reference, "provider", 1, "r2")
+    == Ok(custody.ReservationQuarantined)
+  let assert Ok(custody.Published(published)) =
+    custody.publish_refresh(
+      store,
+      custody.Publish(
+        reference: receipt.reference,
+        dispatch_id: dispatch.dispatch_id,
+        command_id: "p1",
+        update: custody.Update(
+          access_token: "at-2",
+          token_type: "Bearer",
+          expires_at: None,
+          refresh_token: custody.ReplaceWith("rt-2"),
+          id_token: custody.Retain,
+          scopes: custody.Retain,
+        ),
+      ),
+    )
+  assert published.revision == 2
+}
