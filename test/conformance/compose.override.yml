@@ -1,7 +1,11 @@
 # Mount a certificate from Warden's disposable test CA for
 # localhost.emobix.co.uk, so the relying party verifies the suite's TLS with
 # an explicit test trust anchor instead of accepting a self-signed cert.
+# Keep the suite's MongoDB data under build/, outside version control.
 services:
+  mongodb:
+    volumes: !override
+      - ../../build/conformance-mongo:/data/db
   nginx:
     volumes:
       - ../../build/test-pki/conformance.pem:/etc/ssl/certs/nginx-selfsigned.crt:ro
