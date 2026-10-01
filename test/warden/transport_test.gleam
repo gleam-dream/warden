@@ -5,6 +5,7 @@ import gleam/dynamic/decode
 import gleam/json
 import gleam/list
 import gleam/option.{None, Some}
+import gleam/string
 import oidcc_transport
 import warden/internal/transport.{Failure, Ipv4, Ipv6, NotSent, Sent}
 import warden_test_support as support
@@ -65,6 +66,26 @@ pub fn certificate_failures_are_rejected_before_send_test() {
     assert #(cert, get(policy(), support.server_url(s, "/x")))
       == #(cert, Error(Failure(NotSent, transport.TlsRejected)))
   })
+}
+
+/// An IP-literal URL must still match the certificate (iPAddress SAN): the
+/// `localhost` leaf names 127.0.0.1, the `wrong_host` leaf does not.
+pub fn ip_literal_hosts_are_verified_against_the_certificate_test() {
+  let ip_url = fn(s, path) {
+    string.replace(
+      support.server_url(s, path),
+      "://localhost:",
+      "://127.0.0.1:",
+    )
+  }
+  {
+    use s <- with_server("localhost", support.OkJson)
+    let assert Ok(response) = get(policy(), ip_url(s, "/x"))
+    assert response.status == 200
+  }
+  use s <- with_server("wrong_host", support.OkJson)
+  assert get(policy(), ip_url(s, "/x"))
+    == Error(Failure(NotSent, transport.TlsRejected))
 }
 
 pub fn system_trust_does_not_accept_the_test_ca_test() {

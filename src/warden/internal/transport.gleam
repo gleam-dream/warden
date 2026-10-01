@@ -479,10 +479,14 @@ fn connect(
   let is_literal =
     parse_strict_address(charlist.from_string(strip_brackets(target.host)))
     |> result.is_ok
+  // An IP literal gets no SNI option at all: OTP then checks the
+  // certificate's iPAddress SAN against the connected address. Setting
+  // `server_name_indication` to `disable` would switch the name check off.
   let sni = case is_literal {
-    True -> option(a("server_name_indication"), a("disable"))
-    False ->
-      option(a("server_name_indication"), charlist.from_string(target.host))
+    True -> []
+    False -> [
+      option(a("server_name_indication"), charlist.from_string(target.host)),
+    ]
   }
   let options = [
     to_dynamic(a("binary")),
@@ -496,7 +500,7 @@ fn connect(
     option(a("customize_hostname_check"), [
       #(a("match_fun"), hostname_match_fun(a("https"))),
     ]),
-    sni,
+    ..sni
   ]
   case remaining(deadline) {
     0 -> not_sent(Timeout)
