@@ -6,6 +6,7 @@
 //// an unknown `kid`, at most once per second. A failed reload keeps the
 //// previous values. Unusable JWKs are skipped (RFC 7517 §5).
 
+import exception
 import gleam/bit_array
 import gleam/dict
 import gleam/dynamic.{type Dynamic}
@@ -323,6 +324,17 @@ pub opaque type Message {
   Get(reply: Subject(Snapshot))
   RefreshKeys(kid: Option(String), reply: Subject(Snapshot))
   Reload
+  KeysLoaded(Result(JwkSet, Failure))
+  Reloaded(Result(Discovered, Failure))
+}
+
+/// Network fetches run in a separate process, one at a time, so the actor
+/// keeps answering from its last good snapshot while a provider is slow.
+type Fetch {
+  Idle
+  /// Callers waiting for the key refresh in flight.
+  FetchingKeys(waiters: List(Subject(Snapshot)))
+  Reloading
 }
 
 type State {
@@ -333,6 +345,7 @@ type State {
     discovered: Discovered,
     last_key_refresh: Int,
     attempted_kids: List(String),
+    fetch: Fetch,
   )
 }
 
@@ -358,16 +371,15 @@ pub fn start(
       Error(_) -> Error("provider discovery failed")
       Ok(discovered) -> {
         process.send_after(self, discovered.ttl_ms, Reload)
-        actor.initialised(
-          State(
-            self:,
-            issuer:,
-            policy:,
-            discovered:,
-            last_key_refresh: monotonic_ms(),
-            attempted_kids: [],
-          ),
-        )
+        actor.initialised(State(
+          self:,
+          issuer:,
+          policy:,
+          discovered:,
+          last_key_refresh: monotonic_ms(),
+          attempted_kids: [],
+          fetch: Idle,
+        ))
         |> actor.returning(self)
         |> Ok
       }
@@ -382,52 +394,117 @@ fn snapshot(state: State) -> Snapshot {
   Snapshot(state.discovered.metadata, state.discovered.keys)
 }
 
+/// Run `fetch` in a separate process and deliver its result to the actor.
+/// The transport contains its own exceptions; `rescue` covers the rest so a
+/// result always arrives.
+fn in_background(
+  self: Subject(Message),
+  fetch: fn() -> Result(a, Failure),
+  deliver: fn(Result(a, Failure)) -> Message,
+) -> Nil {
+  process.spawn_unlinked(fn() {
+    let result = case exception.rescue(fetch) {
+      Ok(result) -> result
+      Error(_) -> Error(protocol.Unmapped)
+    }
+    process.send(self, deliver(result))
+  })
+  Nil
+}
+
 fn handle(state: State, message: Message) -> actor.Next(State, Message) {
   case message {
     Get(reply) -> {
       process.send(reply, snapshot(state))
       actor.continue(state)
     }
-    RefreshKeys(kid, reply) -> {
-      let now = monotonic_ms()
-      // At most one refresh per second, except that each new kid may
-      // trigger one immediate refresh (bounded list of recent kids).
-      let new_kid = case kid {
-        Some(k) -> !list.contains(state.attempted_kids, k)
-        None -> False
-      }
-      let attempted_kids = case kid {
-        Some(k) if new_kid -> list.take([k, ..state.attempted_kids], 64)
-        _ -> state.attempted_kids
-      }
-      let state = case
-        new_kid || now - state.last_key_refresh >= key_refresh_interval_ms
-      {
-        False -> state
-        True ->
-          case load_keys(state.discovered.jwks_uri, state.policy) {
-            Ok(keys) ->
-              State(
-                ..state,
-                discovered: Discovered(..state.discovered, keys:),
-                last_key_refresh: now,
-                attempted_kids:,
-              )
-            Error(_) -> State(..state, last_key_refresh: now, attempted_kids:)
+    RefreshKeys(kid, reply) ->
+      case state.fetch {
+        // Join the refresh in flight.
+        FetchingKeys(waiters) ->
+          actor.continue(
+            State(..state, fetch: FetchingKeys([reply, ..waiters])),
+          )
+        Idle | Reloading -> {
+          let now = monotonic_ms()
+          // At most one refresh per second, except that each new kid may
+          // trigger one immediate refresh (bounded list of recent kids).
+          let new_kid = case kid {
+            Some(k) -> !list.contains(state.attempted_kids, k)
+            None -> False
           }
+          let attempted_kids = case kid {
+            Some(k) if new_kid -> list.take([k, ..state.attempted_kids], 64)
+            _ -> state.attempted_kids
+          }
+          let allowed =
+            new_kid || now - state.last_key_refresh >= key_refresh_interval_ms
+          case allowed, state.fetch {
+            True, Idle -> {
+              let uri = state.discovered.jwks_uri
+              let policy = state.policy
+              in_background(
+                state.self,
+                fn() { load_keys(uri, policy) },
+                KeysLoaded,
+              )
+              actor.continue(
+                State(
+                  ..state,
+                  last_key_refresh: now,
+                  attempted_kids:,
+                  fetch: FetchingKeys([reply]),
+                ),
+              )
+            }
+            // Throttled, or a reload is already fetching fresh keys.
+            _, _ -> {
+              process.send(reply, snapshot(state))
+              actor.continue(State(..state, attempted_kids:))
+            }
+          }
+        }
       }
-      process.send(reply, snapshot(state))
-      actor.continue(state)
+    KeysLoaded(result) -> {
+      let state = case result {
+        Ok(keys) ->
+          State(..state, discovered: Discovered(..state.discovered, keys:))
+        Error(_) -> state
+      }
+      case state.fetch {
+        FetchingKeys(waiters) ->
+          list.each(waiters, fn(waiter) {
+            process.send(waiter, snapshot(state))
+          })
+        Idle | Reloading -> Nil
+      }
+      actor.continue(State(..state, fetch: Idle))
     }
-    Reload -> {
-      let state = case
-        discover(state.issuer, state.policy, background_deadline(state.policy))
-      {
+    Reload ->
+      case state.fetch {
+        Idle -> {
+          let issuer = state.issuer
+          let policy = state.policy
+          in_background(
+            state.self,
+            fn() { discover(issuer, policy, background_deadline(policy)) },
+            Reloaded,
+          )
+          actor.continue(State(..state, fetch: Reloading))
+        }
+        // A key refresh is in flight; try again shortly.
+        FetchingKeys(_) | Reloading -> {
+          process.send_after(state.self, key_refresh_interval_ms, Reload)
+          actor.continue(state)
+        }
+      }
+    Reloaded(result) -> {
+      let state = case result {
         Ok(discovered) -> State(..state, discovered:)
         Error(_) -> state
       }
       process.send_after(state.self, state.discovered.ttl_ms, Reload)
-      actor.continue(state)
+      actor.continue(State(..state, fetch: Idle))
     }
   }
 }
