@@ -74,23 +74,16 @@ actor could print queued messages carrying tokens; `sys:get_state` reveals
 them. Covered by the VM-introspection duty in
 [APPLICATION-RESPONSIBILITIES.md](APPLICATION-RESPONSIBILITIES.md).
 
-## Decisions for the owner
+## Owner decisions (2026-10-01)
 
-- **F2 — custody lifetime and capacity.** Sessions stay in the custody owner
-  until `logout`; abandoned sessions keep refresh tokens in memory and an
-  account holder can grow memory by repeated logins. Options: (a) an
-  absolute and idle session lifetime in configuration, evicting expired
-  entries; (b) a capacity bound that refuses new installations; (c) both.
-  Refusing at capacity trades memory exhaustion for a login denial of
-  service; eviction by age does not.
-- **J3 — clock skew.** Zero skew everywhere (contract). Providers whose
-  clocks run slightly ahead fail a small fraction of logins on `iat`/`nbf`.
-  Options: keep zero; or allow a small, configurable tolerance (for example
-  5 s) for `iat`, `nbf` and `auth_time` only, never for `exp`.
+- **F2 → D14:** absolute and idle session lifetime in configuration
+  (`with_session_lifetime`, default 12 h / 1 h), measured on the monotonic
+  clock, with expired sessions evicted (no capacity refusal).
+- **J3 → D15:** a configurable clock tolerance (`with_clock_tolerance`,
+  default 5 s) for `iat`, `nbf` and `auth_time`; `exp` stays strict.
+- **F9:** fixed with the follow-ups (monotonic lifetimes).
 
 ## Deferred
 
-- F9: use a monotonic clock for pending-login lifetimes (wall clock remains
-  for JWT validation).
 - J10: refresh keys once on `bad_signature` when the token's `kid` matched no
   key (availability during rotation with kid-less keys).

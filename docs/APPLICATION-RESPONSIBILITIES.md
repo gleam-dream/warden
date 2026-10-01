@@ -38,10 +38,10 @@ classifies failures. These duties remain with the application.
   authority. Durable custody and multi-node replay prevention are not
   provided (design §4.6). A cookie-only (stateless) store would not prevent
   replay.
-- Session expiry is application policy. Warden exposes token expiry
-  (`session_access_token` returns it) and refresh; it does not end sessions
-  on its own, and custody entries stay in memory until `logout`. Call
-  `logout` when a session expires or is abandoned.
+- Warden ends sessions in custody after their absolute or idle lifetime
+  (`config.with_session_lifetime`, default 12 h and 1 h without use); an
+  expired session reads as `SessionNotFound`. Keep the application's own
+  session no longer than that, and call `logout` when the user signs out.
 - Rate-limit login starts (`begin_login`) per client address. The pending
   login store is bounded (`max_pending_logins`); a sustained flood of
   unauthenticated login starts can still keep it full.
@@ -73,5 +73,7 @@ classifies failures. These duties remain with the application.
   and custom trust anchors are for local test providers. Use
   `allowed_hosts` when the provider's hosts are known; it restricts host
   names, not ports. Warden does not check certificate revocation.
-- Clock: Warden validates `exp`/`nbf` with zero clock skew against the node
-  clock; keep hosts synchronised.
+- Clock: Warden validates `exp` with no tolerance and `iat`, `nbf` and
+  `auth_time` with a small tolerance for a provider clock running ahead
+  (`config.with_clock_tolerance`, default 5 s); keep hosts synchronised.
+  Login and session lifetimes use a monotonic clock.

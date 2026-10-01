@@ -241,3 +241,21 @@ cache with the result. The text below describes the removed oidcc path.
     (`startup_is_bounded_by_startup_timeout_test`).
 - Revisit: a native-backend defect that would have needed the fallback; the
   oidcc path remains in git history (`9d74e20` and earlier).
+
+## D14 — Session lifetime in custody (owner decision, 2026-10-01)
+
+- Review finding F2: custody entries stayed until `logout`. Sessions now
+  have an absolute and an idle lifetime (`config.with_session_lifetime`,
+  default 12 hours and 1 hour), measured on the monotonic clock. Every use
+  (restore, access token, userinfo, refresh) restarts the idle period;
+  expired sessions read as `SessionNotFound` and a sweep every minute evicts
+  abandoned ones with their tokens. No capacity refusal: refusing new
+  sessions at a bound would trade memory exhaustion for a login denial of
+  service.
+
+## D15 — Clock tolerance (owner decision, 2026-10-01)
+
+- Review finding J3: zero skew failed a fraction of logins against providers
+  whose clocks run slightly ahead. `config.with_clock_tolerance` (default
+  5 s, at most 300 s) applies to `iat`, `nbf` and the `max_age` `auth_time`
+  check. `exp` has no tolerance: Warden re-checks it strictly after gose.

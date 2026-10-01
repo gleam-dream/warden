@@ -42,7 +42,7 @@ before relying on conversation history. Closed-wave entries are append-only.
 
 | Suite                                         | Command                                                  | Result                                                                                        |
 | --------------------------------------------- | -------------------------------------------------------- | --------------------------------------------------------------------------------------------- |
-| Fast gate                                     | `nix develop -c scripts/check`                           | 107 pass; 13 negative compile cases + positive control; consumer 8 pass                       |
+| Fast gate                                     | `nix develop -c scripts/check`                           | 116 pass; 13 negative compile cases + positive control; consumer 8 pass                       |
 | Keycloak 26.7.5                               | `scripts/keycloak up; WARDEN_SUITE=keycloak gleam test`  | 15 pass (includes raw-oidcc probe P1)                                                         |
 | node-oidc-provider 9.12.2 + panva/jose 6.2.12 | `scripts/node-provider up; WARDEN_SUITE=node gleam test` | 7 pass (21-token corpus, 5 client-auth methods, 22-scenario raw-oidcc differential, probe P3) |
 | Dex v2.45.1, Ory Hydra v26.2.0                | `scripts/interop up; WARDEN_SUITE=interop gleam test`    | 2 pass                                                                                        |
@@ -57,8 +57,8 @@ before relying on conversation history. Closed-wave entries are append-only.
 - Internal security review done (W10): 2 high, 12 medium and about 30
   low findings; all high and medium fixed except F2, which needs a
   decision. See [SECURITY-REVIEW.md](SECURITY-REVIEW.md).
-- Open owner decisions: **F2** (custody lifetime and capacity) and **J3**
-  (clock-skew tolerance), in [SECURITY-REVIEW.md](SECURITY-REVIEW.md).
+- No open owner decisions. F2, J3 and F9 were resolved after the review
+  (D14, D15; see [SECURITY-REVIEW.md](SECURITY-REVIEW.md)).
 
 ## Wave map
 
@@ -75,6 +75,7 @@ before relying on conversation history. Closed-wave entries are append-only.
 | W8   | Native backend (D10), Gleam transport (D11), sinal observations (D12) | Every suite on both backends; default switched           |
 | W9   | PKCE opt-in (D7); oidcc backend removed (D13)                         | Every suite on the single backend                        |
 | W10  | Internal security review and fixes                                    | [SECURITY-REVIEW.md](SECURITY-REVIEW.md); every suite    |
+| W11  | Review follow-ups: session lifetime, clock tolerance, monotonic clock | Every suite                                              |
 
 ## Decision register
 
@@ -225,6 +226,14 @@ See [decisions.md](decisions.md).
   `bad_signature` with an unmatched kid); accepted: T5 (close-delimited
   truncation). Open decisions: F2, J3.
 
+### W11 — review follow-ups (closed 2026-10-01)
+
+- Owner decisions: session lifetime in custody (D14, F2), clock tolerance
+  for `iat`/`nbf`/`auth_time` (D15, J3); F9 fixed: the client keeps a
+  monotonic clock for login and session lifetimes and the wall clock for
+  token validation.
+- Each change test-first (`3057c47`, `6950b4f`, `b1cf370`).
+
 ## Remaining limitations and gaps
 
 - Production readiness requires the design's release gates and an
@@ -240,7 +249,8 @@ See [decisions.md](decisions.md).
   but no conformance verdict.
 - Secret erasure and crash-dump protection are not provided (application
   duty).
-- Clock skew is 0 s; no Warden setting.
+- Clock tolerance 5 s for `iat`/`nbf`/`auth_time` (configurable); none for
+  `exp`.
 - No fallback backend (D13): a native-backend defect has no configuration
   workaround; the oidcc path remains in git history.
 - Path dependency `sinal = { path = "../sinal" }` until sinal publishes a
