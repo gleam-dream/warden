@@ -40,7 +40,7 @@ before relying on conversation history. Closed-wave entries are append-only.
 
 | Suite                                         | Command                                                  | native                                               | oidcc     |
 | --------------------------------------------- | -------------------------------------------------------- | ---------------------------------------------------- | --------- |
-| Fast gate                                     | `nix develop -c scripts/check`                           | 72 pass                                              | 72 pass   |
+| Fast gate                                     | `nix develop -c scripts/check`                           | 74 pass                                              | 74 pass   |
 | Negative compile, consumer                    | (part of `scripts/check`)                                | 13 cases + positive control; 4 consumer tests — pass | —         |
 | Keycloak 26.7.5                               | `scripts/keycloak up; WARDEN_SUITE=keycloak gleam test`  | 15 pass                                              | 15 pass   |
 | node-oidc-provider 9.12.2 + panva/jose 6.2.12 | `scripts/node-provider up; WARDEN_SUITE=node gleam test` | 7 pass                                               | 7 pass    |
