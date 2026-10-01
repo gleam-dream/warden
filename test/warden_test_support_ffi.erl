@@ -1,7 +1,7 @@
 %% Test support exposed to Gleam tests.
 -module(warden_test_support_ffi).
 
--export([mailbox_size/0, client_private_jwk/0, adapter_request/2, server_start/2, server_url/2, server_requests/1, server_stop/1, ca_der/0, worker_kill/1, worker_alive/1, atom_count/0, process_count/0, form_login/3, print/1, node_reset/0, node_next/2, node_log/0, keycloak_logout/1, clock_new/1, clock_set/2, clock_read/1, provider_start/1, kill_named/1, ca_pem/0, keycloak_login/3, authorize/2, visit/1, count_reset/0, count/1, handle/4, pki_file/1, spawn_collect/2]).
+-export([rsa_jwk/2, jwk_with/3, mailbox_size/0, client_private_jwk/0, adapter_request/2, server_start/2, server_url/2, server_requests/1, server_stop/1, ca_der/0, worker_kill/1, worker_alive/1, atom_count/0, process_count/0, form_login/3, print/1, node_reset/0, node_next/2, node_log/0, keycloak_logout/1, clock_new/1, clock_set/2, clock_read/1, provider_start/1, kill_named/1, ca_pem/0, keycloak_login/3, authorize/2, visit/1, count_reset/0, count/1, handle/4, pki_file/1, spawn_collect/2]).
 
 ca_pem() ->
     Dir = warden_test_server:pki_dir(),
@@ -206,3 +206,16 @@ client_private_jwk() ->
 mailbox_size() ->
     {message_queue_len, N} = process_info(self(), message_queue_len),
     N.
+
+%% A disposable RSA JWK (JSON) with a modulus of Bits bits, private or public.
+rsa_jwk(Bits, Private) ->
+    Key = jose_jwk:generate_key({rsa, Bits}),
+    {_, Map} = case Private of
+        true -> jose_jwk:to_map(Key);
+        false -> jose_jwk:to_public_map(Key)
+    end,
+    iolist_to_binary(json:encode(Map#{<<"kid">> => integer_to_binary(Bits)})).
+
+%% The JWK JSON with member Name set to the JSON value ValueJson.
+jwk_with(Jwk, Name, ValueJson) ->
+    iolist_to_binary(json:encode((json:decode(Jwk))#{Name => json:decode(ValueJson)})).

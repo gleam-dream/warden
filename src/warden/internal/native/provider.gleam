@@ -22,6 +22,7 @@ import gleam/string
 import gose/jose/jwk
 import gose/jose/key_set.{type JwkSet}
 import warden/internal/call
+import warden/internal/key_policy
 import warden/internal/protocol.{type Failure, type Metadata}
 import warden/internal/transport
 
@@ -198,6 +199,7 @@ pub fn parse_key_set(text: String) -> Result(JwkSet, Nil) {
     |> result.replace_error(Nil),
   )
   keys
+  |> list.filter(key_policy.strong_enough)
   |> list.filter_map(fn(fields) {
     fields
     |> dict.drop(["x5c", "x5t", "x5t#S256", "x5u"])

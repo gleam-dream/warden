@@ -238,3 +238,11 @@ pub fn jwk_private_member(jwk: String) -> Result(String, Nil) {
 /// Messages waiting in the calling process's mailbox.
 @external(erlang, "warden_test_support_ffi", "mailbox_size")
 pub fn mailbox_size() -> Int
+
+/// A disposable RSA JWK (JSON) of `bits` bits; private or public only.
+@external(erlang, "warden_test_support_ffi", "rsa_jwk")
+pub fn rsa_jwk(bits: Int, private: Bool) -> String
+
+/// The JWK JSON with member `name` set to the JSON value `value_json`.
+@external(erlang, "warden_test_support_ffi", "jwk_with")
+pub fn jwk_with(jwk: String, name: String, value_json: String) -> String

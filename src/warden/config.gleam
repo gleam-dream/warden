@@ -19,9 +19,11 @@
 
 import exception
 import gleam/bit_array
+import gleam/dict
 import gleam/dynamic.{type Dynamic}
 import gleam/dynamic/decode
 import gleam/erlang/atom
+import gleam/json
 import gleam/list
 import gleam/option.{type Option, None, Some}
 import gleam/result
@@ -31,6 +33,7 @@ import gose
 import gose/jose/jwk
 import kryptos/ec
 import kryptos/eddsa
+import warden/internal/key_policy
 import warden/internal/transport
 
 // ---------------------------------------------------------------------------
@@ -60,6 +63,10 @@ pub opaque type SigningKey {
 pub type SigningKeyError {
   /// The text is not a JSON Web Key with private signing material.
   NotAPrivateSigningJwk
+  /// An RSA key below 2048 bits (RFC 7518 §3.3).
+  WeakRsaKey
+  /// The key's `use` or `key_ops` does not permit signing.
+  NotForSigning
 }
 
 /// Parse a private JSON Web Key (RSA, EC P-256/384/521 or Ed25519).
@@ -68,9 +75,17 @@ pub fn signing_key_from_jwk(
 ) -> Result(SigningKey, SigningKeyError) {
   case jwk.from_json(json) {
     Ok(key) ->
-      case gose.is_private_key(key) {
-        False -> Error(NotAPrivateSigningJwk)
-        True -> {
+      case gose.is_private_key(key), jwk_fields(json) {
+        False, _ -> Error(NotAPrivateSigningJwk)
+        True, fields -> {
+          use _ <- result.try(case key_policy.strong_enough(fields) {
+            True -> Ok(Nil)
+            False -> Error(WeakRsaKey)
+          })
+          use _ <- result.try(case key_policy.for_signing(fields) {
+            True -> Ok(Nil)
+            False -> Error(NotForSigning)
+          })
           let algorithms = case gose.key_type(key) {
             gose.RsaKeyType -> ["RS256", "PS256"]
             gose.EcKeyType ->
@@ -102,6 +117,11 @@ pub fn signing_key_from_jwk(
       }
     Error(_) -> Error(NotAPrivateSigningJwk)
   }
+}
+
+fn jwk_fields(text: String) -> dict.Dict(String, Dynamic) {
+  json.parse(text, decode.dict(decode.string, decode.dynamic))
+  |> result.unwrap(dict.new())
 }
 
 // ---------------------------------------------------------------------------
