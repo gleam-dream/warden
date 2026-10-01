@@ -210,11 +210,18 @@ pub fn callback_parsing_table_test() {
     == Error(callback.InvalidParameterValue)
   assert parse(string.repeat("x", callback.max_input_bytes + 1))
     == Error(callback.InputTooLarge)
-  // Form encoding turns '+' into a space; query encoding keeps it.
+  // Both the query and the form body are application/x-www-form-urlencoded
+  // (RFC 6749 Appendix B), where '+' is a space (review finding F8).
   assert callback.parse("code=a+b&state=s", True)
     == Ok(callback.CodeResponse(state: "s", code: "a b", issuer: None))
   assert callback.parse("code=a+b&state=s", False)
-    == Ok(callback.CodeResponse(state: "s", code: "a+b", issuer: None))
+    == Ok(callback.CodeResponse(state: "s", code: "a b", issuer: None))
+  // A '%' that does not start an escape is invalid encoding.
+  assert parse("code=%&state=s") == Error(callback.InvalidEncoding)
+  assert parse("code=a%2&state=s") == Error(callback.InvalidEncoding)
+  // `error` is NQSCHAR, which excludes the space.
+  assert parse("error=access%20denied&state=s")
+    == Error(callback.InvalidParameterValue)
 }
 
 @external(erlang, "crypto", "strong_rand_bytes")

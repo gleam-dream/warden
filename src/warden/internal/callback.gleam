@@ -38,7 +38,10 @@ pub fn parse(input: String, form_encoded: Bool) -> Result(Parsed, Malformed) {
     bit_array.byte_size(bit_array.from_string(input)) > max_input_bytes,
     InputTooLarge,
   )
-  use pairs <- result.try(decode_pairs(input, form_encoded))
+  // Query and form body share one encoding; `form_encoded` only records
+  // which one the caller received.
+  let _ = form_encoded
+  use pairs <- result.try(decode_pairs(input))
   use params <- result.try(unique(pairs))
   use state <- result.try(required(params, "state", MissingState))
   use issuer <- result.try(optional(params, "iss"))
@@ -68,10 +71,7 @@ fn guard(
   }
 }
 
-fn decode_pairs(
-  input: String,
-  form_encoded: Bool,
-) -> Result(List(#(String, String)), Malformed) {
+fn decode_pairs(input: String) -> Result(List(#(String, String)), Malformed) {
   input
   |> string.split("&")
   |> list.filter(fn(segment) { segment != "" })
@@ -80,22 +80,39 @@ fn decode_pairs(
       Ok(pair) -> pair
       Error(Nil) -> #(segment, "")
     }
-    use key <- result.try(decode_component(key, form_encoded))
-    use value <- result.try(decode_component(value, form_encoded))
+    use key <- result.try(decode_component(key))
+    use value <- result.try(decode_component(value))
     Ok(#(key, value))
   })
 }
 
-fn decode_component(
-  raw: String,
-  form_encoded: Bool,
-) -> Result(String, Malformed) {
-  let raw = case form_encoded {
-    True -> string.replace(raw, "+", " ")
-    False -> raw
-  }
-  uri.percent_decode(raw)
+/// `application/x-www-form-urlencoded`, for both the query and the form body
+/// (RFC 6749 Appendix B): '+' is a space and every '%' starts a two-digit
+/// hexadecimal escape.
+fn decode_component(raw: String) -> Result(String, Malformed) {
+  use <- guard(
+    !escapes_well_formed(bit_array.from_string(raw)),
+    InvalidEncoding,
+  )
+  string.replace(raw, "+", " ")
+  |> uri.percent_decode
   |> result.replace_error(InvalidEncoding)
+}
+
+fn escapes_well_formed(bytes: BitArray) -> Bool {
+  case bytes {
+    <<>> -> True
+    <<"%", a, b, rest:bytes>> -> hex(a) && hex(b) && escapes_well_formed(rest)
+    <<"%", _:bytes>> -> False
+    <<_, rest:bytes>> -> escapes_well_formed(rest)
+    _ -> False
+  }
+}
+
+fn hex(byte: Int) -> Bool {
+  { byte >= 0x30 && byte <= 0x39 }
+  || { byte >= 0x41 && byte <= 0x46 }
+  || { byte >= 0x61 && byte <= 0x66 }
 }
 
 fn unique(
@@ -152,10 +169,7 @@ fn nqschar(value: String) -> Bool {
   let bytes = bit_array.from_string(value)
   bit_array.byte_size(bytes) <= 256
   && all_bytes(bytes, fn(b) {
-    b == 0x20
-    || b == 0x21
-    || { b >= 0x23 && b <= 0x5B }
-    || { b >= 0x5D && b <= 0x7E }
+    b == 0x21 || { b >= 0x23 && b <= 0x5B } || { b >= 0x5D && b <= 0x7E }
   })
 }
 
