@@ -30,13 +30,21 @@ before relying on conversation history. Closed-wave entries are append-only.
 
 ## Current state
 
-- Wave: **W2 MVP login** — real Keycloak login through the public API passes
-  (10 tests incl. 8-way race → one token request). Next: unit/property tests
-  for the pure parts, negative compiler tests, store race/expiry tests at the
-  lock, then W3.
-- Commands: `nix develop -c scripts/check` (fast gate);
-  `scripts/keycloak up` then `WARDEN_SUITE=keycloak gleam test`;
-  `scripts/node-provider up` then `WARDEN_SUITE=node gleam test`.
+- Waves W0–W7 executed (2026-09-30). Branch `warden-implementation`
+  (local, not pushed). Repository private; no release published.
+- Results on the final tree:
+
+| Suite                                         | Command                                                  | Result                                                                                                                                                          |
+| --------------------------------------------- | -------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Fast gate                                     | `nix develop -c scripts/check`                           | 83 tests, 13 negative compile cases + positive control, consumer 4 tests — pass                                                                                 |
+| Keycloak 26.7.5                               | `scripts/keycloak up; WARDEN_SUITE=keycloak gleam test`  | 15 pass                                                                                                                                                         |
+| node-oidc-provider 9.12.2 + panva/jose 6.2.12 | `scripts/node-provider up; WARDEN_SUITE=node gleam test` | 7 pass (21-token corpus, 5 client-auth methods, 22-scenario differential)                                                                                       |
+| Dex v2.45.1, Ory Hydra v26.2.0                | `scripts/interop up; WARDEN_SUITE=interop gleam test`    | 2 pass                                                                                                                                                          |
+| Browser (Chrome 154)                          | `scripts/browser-journey`                                | 9/9 scenarios pass                                                                                                                                              |
+| OIDF RP conformance release-v5.3.1            | `scripts/conformance-suite up; scripts/conformance`      | see [evidence](evidence/conformance/README.md): 34 PASSED, 3 SKIPPED (`alg: none` refused), 3 REVIEW (front-channel), 1 suite defect; **non-default policy D7** |
+
+- Open owner decisions: **D6** (absent refresh ID token) and **D7** (PKCE
+  advertisement) in [decisions.md](decisions.md).
 
 ## Wave map
 
@@ -57,7 +65,11 @@ See [decisions.md](decisions.md).
 
 ## Open decisions
 
-(none yet)
+- D6 — Support refresh responses without an ID token (OIDC Core §12.2)?
+  The pinned oidcc refresh path cannot; supporting it needs a refresh adapter
+  that does not route through `oidcc_token:refresh/3`.
+- D7 — Keep requiring advertised S256 (RFC 9700 §2.1.1)? Conformance
+  evidence currently relies on an internal harness policy.
 
 ## Closed waves
 
@@ -86,3 +98,68 @@ See [decisions.md](decisions.md).
   [P4](probes/P4-conformance.md).
 - Revised plan: none of the probes changed the accepted security contract;
   D6 needs an owner decision to _extend_ capability.
+
+### W2 — MVP login through Keycloak (closed 2026-09-30)
+
+- Public API: pure `warden/config`, `warden.start`/`supervised`,
+  `begin_login`, `complete_login` (query and form-post), custody install and
+  recovery. Real Keycloak logins, 8-way callback race → one token request,
+  replay/binding/issuer/state/expiry/denial negatives; scripted-provider fast
+  suite with store-level lock/expiry, store loss, exchange classification.
+- Found and fixed: `process.call` panics (replaced by a non-panicking call);
+  startup must ensure OTP applications; provider error bodies leaked into
+  oidcc telemetry (transport sanitisation, D3).
+
+### W3 — custody, refresh and remaining operations (closed 2026-09-30)
+
+- Refresh reservation/rotation/retain/continuity/quarantine/publication
+  recovery; userinfo, client credentials, introspection, RP logout against
+  scripted provider, Keycloak, node-oidc-provider, Dex and Hydra.
+- Absent refresh ID token reproduced through Warden: quarantined (D6).
+
+### W4 — hostile corpus and differential (closed 2026-09-30)
+
+- panva/jose corpus of 21 ID tokens; client assertions verified by panva/jose;
+  raw-oidcc differential on 22 separate transactions: agreement except the
+  two documented stricter policies (extra audience, missing ID token).
+- oidcc/jose categorise `none`/HS-confusion as signature/key failures
+  (recorded limitation; rejection holds).
+
+### W5 — consumer and browser journey (closed 2026-09-30)
+
+- `consumer/` package (public imports only), reference RP, 9 Chrome
+  scenarios. Test PKI moved to OpenSSL (browsers reject pkix_test_data
+  certificates).
+
+### W6 — conformance (closed with open decision, 2026-09-30)
+
+- Local suite with verified TLS. Default policy blocks every plan (D7);
+  evidence produced under a labelled internal policy. Found and fixed an
+  oidcc/jose crash on unusable JWKs (D8) and double discovery (D9).
+- Not passed: 3 REVIEW (front-channel logout gap), 1 suite defect
+  (third-party initiation).
+
+### W7 — interoperability and operational gates (closed 2026-09-30)
+
+- Dex and Hydra pinned by digest; worker crash/restart, key rotation,
+  bounded pending logins, atom and process growth, custody loss during
+  refresh.
+
+## Remaining limitations and gaps
+
+- Production readiness requires the design's release gates and an
+  independent security review of Warden-owned boundaries (`warden_http`,
+  `warden_oidcc`, stores); none has been performed. Not certified.
+- In-memory stores only: no durable custody, no multi-node replay authority.
+- Absent refresh ID token unsupported by the default adapter (D6).
+- Error-category precision for `none`/HS-confusion/bad signature follows
+  oidcc/jose (rejection verified, category not).
+- Explicit gaps unchanged (design §4.8): PAR, JAR, DPoP, JWT-bearer, dynamic
+  registration, JARM/FAPI, revocation, device grant, token exchange,
+  back/front-channel logout; encrypted ID tokens and signed request objects
+  are disabled. Third-party initiated login has a route in the reference RP
+  but no conformance verdict.
+- Secret erasure and crash-dump protection are not provided; telemetry
+  `exception` metadata from oidcc may contain terms (application duty).
+- Clock skew is oidcc's global default (0 s); no Warden setting.
+- Upstream defects to report: oidcc `has_kid/2` and unusable-key fold (D8).

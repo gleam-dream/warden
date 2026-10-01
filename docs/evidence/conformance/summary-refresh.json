@@ -1,0 +1,15 @@
+{
+  "suite": "release-v5.3.1",
+  "issuer": "https://localhost.emobix.co.uk:8443/test/a/warden/",
+  "policy": "NON-DEFAULT: S256 assumed without metadata advertisement (decision D7 pending)",
+  "summary": [
+    {
+      "module": "oidcc-client-test-refresh-token-invalid-issuer",
+      "id": "aPMLE3Xx92jSWku",
+      "status": "FINISHED",
+      "result": "PASSED",
+      "notes": ["login → 200 /", "refresh → quarantined"],
+      "plan": "oidcc-client-refreshtoken-test-plan"
+    }
+  ]
+}

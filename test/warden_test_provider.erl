@@ -54,7 +54,9 @@ set_claims(#{table := Table}, Claims) ->
 
 %% Register an authorization code bound to the transaction's nonce.
 issue_code(#{table := Table}, Code, Nonce) ->
-    ets:insert(Table, {{code, Code}, Nonce}),
+    %% The grant's authentication time is fixed when the code is issued and
+    %% carried unchanged through refreshes (OIDC Core §12.2).
+    ets:insert(Table, {{code, Code}, {Nonce, erlang:system_time(second) - 5}}),
     nil.
 
 %% Script a behaviour for a token request: key is `{code, Code}`,
@@ -126,21 +128,21 @@ handle(Table, #{path := <<"/token">>, body := Body}) ->
     case Params of
         #{<<"grant_type">> := <<"authorization_code">>, <<"code">> := Code} ->
             case ets:take(Table, {code, Code}) of
-                [{_, Nonce}] -> behave(Table, {code, Code}, Nonce);
+                [{_, Grant}] -> behave(Table, {code, Code}, Grant);
                 [] -> json(400, #{<<"error">> => <<"invalid_grant">>})
             end;
         #{<<"grant_type">> := <<"refresh_token">>, <<"refresh_token">> := Rt} ->
             case ets:take(Table, {refresh, Rt}) of
-                [{_, Nonce}] ->
+                [{_, Grant}] ->
                     %% A response without a new refresh token leaves the
                     %% presented one valid (retain semantics).
                     %% A scripted error response does not consume the token.
                     case ets:lookup(Table, {script, {refresh, Rt}}) of
-                        [{_, drop_refresh_token}] -> ets:insert(Table, {{refresh, Rt}, Nonce});
-                        [{_, {status, _, _}}] -> ets:insert(Table, {{refresh, Rt}, Nonce});
+                        [{_, drop_refresh_token}] -> ets:insert(Table, {{refresh, Rt}, Grant});
+                        [{_, {status, _, _}}] -> ets:insert(Table, {{refresh, Rt}, Grant});
                         _ -> ok
                     end,
-                    behave(Table, {refresh, Rt}, Nonce);
+                    behave(Table, {refresh, Rt}, Grant);
                 [] -> json(400, #{<<"error">> => <<"invalid_grant">>})
             end;
         #{<<"grant_type">> := <<"client_credentials">>} ->
@@ -178,7 +180,7 @@ behave(Table, Key, Nonce) ->
         [{_, Behaviour}] -> tokens(Table, Nonce, #{behaviour => Behaviour})
     end.
 
-tokens(Table, Nonce, Opts) ->
+tokens(Table, {Nonce, AuthTime} = Grant, Opts) ->
     Behaviour = maps:get(behaviour, Opts, none),
     Issuer = lookup(Table, issuer),
     Now = erlang:system_time(second),
@@ -190,7 +192,7 @@ tokens(Table, Nonce, Opts) ->
         <<"aud">> => ?CLIENT,
         <<"exp">> => Now + 300,
         <<"iat">> => Now,
-        <<"auth_time">> => Now - 5,
+        <<"auth_time">> => AuthTime,
         <<"nonce">> => Nonce,
         <<"email">> => <<"user@example.test">>,
         <<"email_verified">> => true,
@@ -217,7 +219,7 @@ tokens(Table, Nonce, Opts) ->
             _ -> Body0
         end,
     case maps:is_key(<<"refresh_token">>, Body1) of
-        true -> ets:insert(Table, {{refresh, Refresh}, Nonce});
+        true -> ets:insert(Table, {{refresh, Refresh}, Grant});
         false -> ok
     end,
     json(200, Body1).

@@ -3,6 +3,7 @@
 //// userinfo, client credentials, introspection and logout.
 
 import gleam/dynamic/decode
+import gleam/erlang/process
 import gleam/list
 import gleam/option.{None, Some}
 import gleam/string
@@ -341,6 +342,32 @@ pub fn logout_without_end_session_endpoint_is_explicit_test() {
     )
   let assert Error(warden.SessionNotFound) =
     warden.restore_session(client, warden.session_reference(session))
+  warden.stop(client)
+  support.provider_stop(provider)
+}
+
+/// The custody owner is unavailable: refresh never reaches the provider and
+/// reports a typed unresolved reservation; after the owner restarts empty,
+/// the session is gone rather than silently re-created.
+pub fn custody_loss_during_refresh_never_calls_the_provider_test() {
+  let provider = support.provider_start(support.Standard)
+  let client =
+    start(config.Settings(..settings(provider), store_timeout_ms: 300))
+  let session = logged_in(provider, client)
+  let requests = support.token_requests(provider)
+  let owner = warden.custody_owner(client)
+  let assert Ok(pid) = process.subject_owner(owner.subject)
+  process.kill(pid)
+  let first = warden.refresh_session(client, session)
+  case first {
+    Ok(warden.RefreshReservationUnresolved(_))
+    | Error(warden.RefreshSessionMissing) -> Nil
+    other -> panic as string.inspect(other)
+  }
+  support.sleep(100)
+  let assert Error(warden.RefreshSessionMissing) =
+    warden.refresh_session(client, session)
+  assert support.token_requests(provider) == requests
   warden.stop(client)
   support.provider_stop(provider)
 }

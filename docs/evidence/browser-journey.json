@@ -1,0 +1,60 @@
+{
+  "chrome": "installed Google Chrome",
+  "results": [
+    {
+      "name": "query login shows verified identity and custom claim",
+      "result": "pass",
+      "detail": {
+        "email": "alice@example.test",
+        "department": "platform"
+      }
+    },
+    {
+      "name": "replayed callback is rejected",
+      "result": "pass",
+      "detail": {
+        "status": 401
+      }
+    },
+    {
+      "name": "refresh rotates tokens and advances the revision",
+      "result": "pass",
+      "detail": {
+        "revision": 3
+      }
+    },
+    {
+      "name": "simultaneous tabs complete independently",
+      "result": "pass",
+      "detail": {
+        "emailA": "bob@example.test",
+        "emailB": "bob@example.test"
+      }
+    },
+    {
+      "name": "provider denial is reported and consumes the login",
+      "result": "pass",
+      "detail": null
+    },
+    {
+      "name": "callback without the browser binding does not consume the login",
+      "result": "pass",
+      "detail": null
+    },
+    {
+      "name": "expired login is rejected",
+      "result": "pass",
+      "detail": null
+    },
+    {
+      "name": "form_post login with SameSite=None binding",
+      "result": "pass",
+      "detail": null
+    },
+    {
+      "name": "logout ends local and provider sessions",
+      "result": "pass",
+      "detail": null
+    }
+  ]
+}

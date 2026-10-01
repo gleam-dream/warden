@@ -351,8 +351,18 @@ async function runModule(plan, planId, module) {
       notes,
     };
   } finally {
+    // Wait until the RP has exited so the next module can bind the port.
+    const exited = new Promise((resolve) => app.child.once("exit", resolve));
     app.child.kill();
-    await sleep(300);
+    await Promise.race([exited, sleep(5000)]);
+    for (let i = 0; i < 20; i++) {
+      try {
+        await fetch(`${APP}/health`);
+        await sleep(250);
+      } catch {
+        break;
+      }
+    }
   }
 }
 

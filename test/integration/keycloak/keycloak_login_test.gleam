@@ -279,3 +279,28 @@ pub fn expired_login_is_rejected_test() {
   assert support.count("/protocol/openid-connect/token") == 0
   warden.stop(client)
 }
+
+/// RFC 9700 §4.5 code injection: an attacker's authorization code presented
+/// with the victim's own state, binding and issuer. Warden sends the victim
+/// transaction's PKCE verifier, which does not match the attacker's
+/// challenge, so the provider rejects the exchange.
+pub fn injected_code_is_rejected_by_pkce_test() {
+  let client = start(settings())
+  let #(attacker_query, _) = login(client, "bob")
+  let assert Ok(victim) =
+    warden.begin_login(client, None, warden.default_login())
+  let assert Ok(#(_, victim_query)) = string.split_once(victim.url, "?")
+  let injected =
+    uri.query_to_string([
+      #("code", param(attacker_query, "code")),
+      #("state", param(victim_query, "state")),
+      #("iss", issuer),
+    ])
+  let assert Error(warden.ExchangeRejected(warden.InvalidGrant)) =
+    warden.complete_login(
+      client,
+      warden.QueryCallback(injected),
+      Some(victim.browser_binding),
+    )
+  warden.stop(client)
+}
