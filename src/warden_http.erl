@@ -387,7 +387,8 @@ receive_response(Socket, Method, Deadline, Config) ->
         {ok, {Status, Reason}} ?= read_status(Socket, Deadline, ?MAX_INTERIM),
         {ok, Headers} ?= read_headers(Socket, Deadline, Config, [], 0),
         ok = ssl:setopts(Socket, [{packet, raw}, {packet_size, 0}]),
-        {ok, Body} ?= read_body(Socket, Method, Status, Headers, Deadline, Config),
+        {ok, RawBody} ?= read_body(Socket, Method, Status, Headers, Deadline, Config),
+        {ok, Body} ?= sanitise(Status, Headers, RawBody),
         {ok, {{"HTTP/1.1", Status, Reason}, Headers, Body}}
     end.
 
@@ -607,6 +608,60 @@ recv(Socket, Deadline) ->
                 {error, {invalid_packet, _}} -> {error, headers_too_large};
                 {error, _} -> {error, receive_failed}
             end
+    end.
+
+%% ---------------------------------------------------------------------------
+%% Body sanitisation
+%%
+%% oidcc 3.9.0 places the error body of a non-success response, and parser
+%% details of an invalid JSON success body, into error terms and telemetry
+%% metadata. Before oidcc sees a response:
+%% - a non-success body is reduced to `{"error": Code}` when it carries an
+%%   RFC 6749 error code, and to an empty body otherwise;
+%% - a success body declared as JSON must parse, or the request fails as
+%%   `{sent, malformed_response}`.
+
+sanitise(Status, Headers, Body) when Status =:= 200; Status =:= 201 ->
+    case json_declared(Headers) of
+        true ->
+            try json:decode(Body) of
+                _ -> {ok, Body}
+            catch
+                _:_ -> sent(malformed_response)
+            end;
+        false ->
+            {ok, Body}
+    end;
+sanitise(_Status, _Headers, Body) ->
+    Code =
+        try json:decode(Body) of
+            #{<<"error">> := E} when is_binary(E), byte_size(E) > 0, byte_size(E) =< 64 ->
+                case lists:all(fun oauth_error_char/1, binary_to_list(E)) of
+                    true -> E;
+                    false -> none
+                end;
+            _ ->
+                none
+        catch
+            _:_ -> none
+        end,
+    case Code of
+        none -> {ok, <<>>};
+        _ -> {ok, iolist_to_binary(json:encode(#{<<"error">> => Code}))}
+    end.
+
+oauth_error_char(C) ->
+    C =:= 16#20 orelse C =:= 16#21 orelse (C >= 16#23 andalso C =< 16#5B) orelse (C >= 16#5D andalso C =< 16#7E).
+
+json_declared(Headers) ->
+    case header_values("content-type", Headers) of
+        [Value | _] ->
+            [Media | _] = binary:split(string:lowercase(iolist_to_binary(Value)), <<";">>),
+            Trimmed = string:trim(Media),
+            Trimmed =:= <<"application/json">> orelse
+                (byte_size(Trimmed) > 5 andalso binary:part(Trimmed, byte_size(Trimmed) - 5, 5) =:= <<"+json">>);
+        [] ->
+            false
     end.
 
 %% ---------------------------------------------------------------------------

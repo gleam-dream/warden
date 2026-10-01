@@ -163,7 +163,7 @@ pub opaque type Message(identity) {
   )
   PublishMsg(Publish, Subject(PublishReply))
   RemoveMsg(String, Subject(Nil))
-  DelayRepliesMsg(Int, Subject(Nil))
+  DelayRepliesMsg(DelayedReply, Int, Subject(Nil))
 }
 
 type State(identity) {
@@ -174,8 +174,15 @@ type State(identity) {
     new_reference: fn() -> String,
     next_dispatch: Int,
     history_limit: Int,
-    reply_delay: Int,
+    reply_delay: #(DelayedReply, Int),
   )
+}
+
+/// Test support: which replies to delay.
+pub type DelayedReply {
+  DelayInstall
+  DelayPublish
+  DelayNothing
 }
 
 pub type Store(identity) {
@@ -187,24 +194,31 @@ pub fn start(
   history_limit history_limit: Int,
   name name: process.Name(Message(identity)),
 ) -> actor.StartResult(Subject(Message(identity))) {
-  actor.new(State(
-    entries: dict.new(),
-    installs: dict.new(),
-    publications: dict.new(),
-    new_reference:,
-    next_dispatch: 1,
-    history_limit:,
-    reply_delay: 0,
-  ))
+  actor.new(
+    State(
+      entries: dict.new(),
+      installs: dict.new(),
+      publications: dict.new(),
+      new_reference:,
+      next_dispatch: 1,
+      history_limit:,
+      reply_delay: #(DelayNothing, 0),
+    ),
+  )
   |> actor.named(name)
   |> actor.on_message(handle)
   |> actor.start
 }
 
-fn reply(state: State(identity), subject: Subject(a), value: a) -> Nil {
+fn reply(
+  state: State(identity),
+  kind: DelayedReply,
+  subject: Subject(a),
+  value: a,
+) -> Nil {
   case state.reply_delay {
-    0 -> Nil
-    delay -> process.sleep(delay)
+    #(delayed, delay) if delayed == kind && delay > 0 -> process.sleep(delay)
+    _ -> Nil
   }
   process.send(subject, value)
 }
@@ -217,7 +231,7 @@ fn handle(
     InstallMsg(command, subject) ->
       case dict.get(state.installs, command.command_id) {
         Ok(receipt) -> {
-          reply(state, subject, receipt)
+          reply(state, DelayInstall, subject, receipt)
           actor.continue(state)
         }
         Error(Nil) -> {
@@ -243,7 +257,7 @@ fn handle(
                 state.history_limit,
               ),
             )
-          reply(state, subject, receipt)
+          reply(state, DelayInstall, subject, receipt)
           actor.continue(state)
         }
       }
@@ -260,33 +274,33 @@ fn handle(
           ))
         Error(Nil) -> Error(Nil)
       }
-      reply(state, subject, result)
+      reply(state, DelayNothing, subject, result)
       actor.continue(state)
     }
     ReserveMsg(reference, provider, revision, command_id, subject) -> {
       let #(result, state) =
         reserve(state, reference, provider, revision, command_id)
-      reply(state, subject, result)
+      reply(state, DelayNothing, subject, result)
       actor.continue(state)
     }
     SettleMsg(reference, dispatch_id, settlement, subject) -> {
       let #(result, state) = settle(state, reference, dispatch_id, settlement)
-      reply(state, subject, result)
+      reply(state, DelayNothing, subject, result)
       actor.continue(state)
     }
     PublishMsg(command, subject) -> {
       let #(result, state) = publish(state, command)
-      reply(state, subject, result)
+      reply(state, DelayPublish, subject, result)
       actor.continue(state)
     }
     RemoveMsg(reference, subject) -> {
       let state = State(..state, entries: dict.delete(state.entries, reference))
-      reply(state, subject, Nil)
+      reply(state, DelayNothing, subject, Nil)
       actor.continue(state)
     }
-    DelayRepliesMsg(delay, subject) -> {
+    DelayRepliesMsg(kind, delay, subject) -> {
       process.send(subject, Nil)
-      actor.continue(State(..state, reply_delay: delay))
+      actor.continue(State(..state, reply_delay: #(kind, delay)))
     }
   }
 }
@@ -498,12 +512,13 @@ pub fn remove(
   call.call(store.subject, store.timeout, RemoveMsg(reference, _))
 }
 
-/// Test support: delay every subsequent reply by `delay` milliseconds after
-/// the state change is committed, simulating a lost acknowledgement.
+/// Test support: delay replies of one kind by `delay` milliseconds after the
+/// state change is committed, simulating a lost acknowledgement.
 @internal
 pub fn delay_replies(
   store: Store(identity),
+  kind: DelayedReply,
   delay: Int,
 ) -> Result(Nil, CallError) {
-  call.call(store.subject, store.timeout, DelayRepliesMsg(delay, _))
+  call.call(store.subject, store.timeout, DelayRepliesMsg(kind, delay, _))
 }

@@ -275,3 +275,25 @@ oidcc_discovery_uses_adapter_test() ->
         after 1000 -> error(no_request)
         end
     end).
+
+error_bodies_are_reduced_to_the_oauth_error_code_test() ->
+    Handler = fun(_) ->
+        {respond, 400, [{<<"content-type">>, <<"application/json">>}],
+            <<"{\"error\":\"invalid_grant\",\"error_description\":\"SECRET-TEXT\",\"extra\":\"x\"}">>}
+    end,
+    with_server("localhost", Handler, fun(S) ->
+        {ok, {{_, 400, _}, _, Body}} = get(warden_test_server:url(S, "/x"), cfg(#{})),
+        ?assertEqual(#{<<"error">> => <<"invalid_grant">>}, json:decode(Body))
+    end).
+
+non_oauth_error_bodies_are_dropped_test() ->
+    Handler = fun(_) -> {respond, 500, [{<<"content-type">>, <<"text/html">>}], <<"<html>SECRET</html>">>} end,
+    with_server("localhost", Handler, fun(S) ->
+        ?assertMatch({ok, {{_, 500, _}, _, <<>>}}, get(warden_test_server:url(S, "/x"), cfg(#{})))
+    end).
+
+invalid_json_success_is_malformed_test() ->
+    Handler = fun(_) -> {respond, 200, [{<<"content-type">>, <<"application/json">>}], <<"{\"access_token\":\"SECRET\"">>} end,
+    with_server("localhost", Handler, fun(S) ->
+        ?assertEqual({error, {warden_transport, sent, malformed_response}}, get(warden_test_server:url(S, "/x"), cfg(#{})))
+    end).

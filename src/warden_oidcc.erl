@@ -38,7 +38,8 @@
     client_credentials/2,
     logout_url/2,
     classify/1,
-    params/1
+    params/1,
+    contain_for_test/1
 ]).
 
 %% Parameter map from Gleam `[{Key, Value}]`. Keys come from a fixed list so
@@ -507,6 +508,9 @@ json_claims(_) ->
 %% ---------------------------------------------------------------------------
 %% Containment and classification
 
+%% Test entry point for the containment and flattening path.
+contain_for_test(Fun) -> contain(Fun).
+
 contain(Fun) ->
     Result =
         try
@@ -553,6 +557,8 @@ classify({invalid_property, _}) -> {response, malformed};
 classify({issuer_mismatch, _}) -> {policy, issuer_mismatch};
 classify({invalid_issuer, _}) -> {policy, invalid_issuer};
 classify({invalid_document, _}) -> {response, malformed};
+classify({missing_config_property, _}) -> {response, malformed};
+classify({invalid_config_property, _}) -> {response, malformed};
 classify(no_supported_auth_method) -> {policy, auth_method_unsupported};
 classify(pkce_verifier_required) -> {policy, pkce_unsupported};
 classify(no_supported_code_challenge) -> {policy, pkce_unsupported};

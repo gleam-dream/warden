@@ -1,7 +1,7 @@
 %% Test support exposed to Gleam tests.
 -module(warden_test_support_ffi).
 
--export([ca_pem/0, keycloak_login/3, authorize/2, visit/1, count_reset/0, count/1, handle/4, pki_file/1, spawn_collect/2]).
+-export([clock_new/1, clock_set/2, clock_read/1, provider_start/1, kill_named/1, ca_pem/0, keycloak_login/3, authorize/2, visit/1, count_reset/0, count/1, handle/4, pki_file/1, spawn_collect/2]).
 
 ca_pem() ->
     Dir = warden_test_server:pki_dir(),
@@ -72,3 +72,30 @@ spawn_collect(Funs, TimeoutMs) ->
     Pids = [spawn(fun() -> receive Go -> ok end, Parent ! {self(), F()} end) || F <- Funs],
     [P ! Go || P <- Pids],
     [receive {P, R} -> R after TimeoutMs -> timeout end || P <- Pids].
+
+%% Fake clock shared across processes.
+clock_new(Start) ->
+    Ref = atomics:new(1, [{signed, true}]),
+    atomics:put(Ref, 1, Start),
+    Ref.
+clock_set(Ref, Value) -> atomics:put(Ref, 1, Value), nil.
+clock_read(Ref) -> atomics:get(Ref, 1).
+
+provider_start(Variant) ->
+    warden_test_provider:start(overrides(Variant)).
+
+overrides(standard) -> #{};
+overrides(no_s256) -> #{<<"code_challenge_methods_supported">> => [<<"plain">>]};
+overrides(requires_par) -> #{<<"require_pushed_authorization_requests">> => true, <<"pushed_authorization_request_endpoint">> => <<"https://localhost:1/par">>};
+overrides(no_end_session) -> #{<<"end_session_endpoint">> => delete};
+overrides(wrong_issuer) -> #{<<"issuer">> => <<"https://evil.example">>};
+overrides(no_iss_parameter) -> #{<<"authorization_response_iss_parameter_supported">> => false};
+overrides(no_form_post) -> #{<<"response_modes_supported">> => [<<"query">>]};
+overrides(hs256_only) -> #{<<"id_token_signing_alg_values_supported">> => [<<"HS256">>]}.
+
+%% Kill the process registered under a Gleam process name.
+kill_named(Name) ->
+    case whereis(Name) of
+        undefined -> nil;
+        Pid -> exit(Pid, kill), nil
+    end.
