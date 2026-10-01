@@ -158,7 +158,7 @@ cache with the result. The text below describes the removed oidcc path.
   single-maintainer packages (CI on OTP 27–29, RFC 7515 vectors, Wycheproof
   in kryptos). Both need pinning and review like oidcc.
 
-## D11 — Transport in Gleam over OTP ssl (approved 2026-09-30)
+## D11 — Transport: Gleam over OTP ssl, then HTTP Gun (HTTP Gun adopted 2026-10-01)
 
 - gleam_httpc 5.0.0 offers only TLS on/off, redirects and a timeout: no
   custom trust anchors, no body bound before allocation, no destination
@@ -168,6 +168,22 @@ cache with the result. The text below describes the removed oidcc path.
   and `public_key` with `@external` and no handwritten Erlang module.
 - Later: adopt http_gun once it gains a destination-policy hook
   ([prompt](handoff/http-gun-destination-policy.md)).
+- 2026-10-01: http_gun implements the hook; validated in isolation against
+  `369da4f` ([evidence](evidence/http-gun-adoption/README.md)): not adopted.
+  Trust (in-memory anchors), stdlib 1.x and connection-reuse gaps are fixed
+  there. Release gate unmet (no published version). Unchanged-test gate
+  unmet: four malformed responses are rejected with a coarser class and the
+  bare-LF reason-phrase case is accepted; meeting it needs an owner decision
+  on those expectations.
+- 2026-10-01, adopted (owner decision): the transport runs on HTTP Gun's
+  public API, by local path until all packages are published (D16), with the
+  five rows accepted (D17). Warden's own DNS, TLS, socket and HTTP parsing
+  are removed; `transport.gleam` keeps application policy (HTTPS only, URL
+  and header hygiene, 64 KiB request cap, early refusal of an oversized
+  declared length, content-encoding refusal), the failure mapping and
+  observations. Each Warden client owns a supervised, shared HTTP Gun client
+  (first supervisor child; found through a stable key after restarts,
+  released by `warden.stop`); startup discovery uses a one-shot client.
 
 ### D10 parity evidence (2026-09-30)
 
@@ -259,3 +275,26 @@ cache with the result. The text below describes the removed oidcc path.
   whose clocks run slightly ahead. `config.with_clock_tolerance` (default
   5 s, at most 300 s) applies to `iat`, `nbf` and the `max_age` `auth_time`
   check. `exp` has no tolerance: Warden re-checks it strictly after gose.
+
+## D16 — Unpublished siblings by local path (owner decision, 2026-10-01)
+
+- Warden depends on `http_gun` and `sinal` by path (`../http_gun`,
+  `../sinal`) until the owner publishes all packages "once all systems are
+  working smoothly". This relaxes D11's "released version" gate for
+  development; Warden cannot be published while path dependencies remain.
+- Revisit: when HTTP Gun and Sinal are published, pin exact versions and
+  rerun every suite.
+
+## D17 — Coarser transport classes accepted (owner decision, 2026-10-01)
+
+- With HTTP Gun, four malformed responses are still rejected (`Sent`) but
+  classified `ReceiveFailed`, because Gun reports them only as a peer close
+  or a dependency crash: a truncated fixed-length body, an invalid status
+  line, a signed `content-length`, a signed chunk size. The public reason is
+  `ReceiveFailed`; `TruncatedResponse` is removed (it cannot occur).
+- A bare LF inside the status line is read as part of the reason phrase,
+  which Gun discards; the body is read to the connection's close. Accepted as
+  HTTP Gun's documented limitation: the close-delimited body ends the
+  connection, so nothing reaches another request.
+- Security is unchanged: every malformed response is still refused or
+  confined to its own connection; only diagnostic precision is lower.

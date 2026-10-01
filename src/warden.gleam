@@ -65,6 +65,8 @@ pub opaque type Client {
     /// Elapsed time for pending-login and session lifetimes.
     monotonic: fn() -> Int,
     provider_name: Dynamic,
+    /// The transport policy bound to this client's shared HTTP Gun client.
+    http: transport.Policy,
   )
 }
 
@@ -133,7 +135,10 @@ pub type TransportReason {
   ResponseTooLarge
   ResponseHeadersTooLarge
   MalformedHttp
-  TruncatedResponse
+  /// The response failed or ended early after the request may have been
+  /// sent: a closed connection, a truncated body, or a framing error the
+  /// HTTP parser reports only as a failure (decision D17).
+  ReceiveFailed
   UnsupportedContentEncoding
   OtherTransportFailure
 }
@@ -178,6 +183,10 @@ pub fn supervised(config: Config) -> supervision.ChildSpecification(Client) {
 pub fn stop(client: Client) -> Nil {
   process.unlink(client.supervisor)
   process.send_abnormal_exit(client.supervisor, Shutdown)
+  case client.http.pool {
+    Some(pool) -> transport.release(pool)
+    None -> Nil
+  }
 }
 
 type ExitReason {
@@ -228,26 +237,42 @@ pub fn start_with_clocks(
   let timeout = config.store_timeout_ms(config)
   let provider_handle =
     provider.Provider(process.named_subject(provider_name), timeout)
-  start_supervised(
-    config,
-    clock,
-    monotonic,
-    supervision.worker(fn() {
-      provider.start(provider_name, issuer, policy, Some(discovered))
-      |> result.map(fn(started) { actor.Started(..started, data: Nil) })
-    }),
-    native.new(config, provider_handle, policy, clock),
-    to_dynamic(provider_name),
-  )
+  // Discovery used a one-shot client; from here on every request uses the
+  // client's supervised, shared HTTP Gun client.
+  let pool = transport.new_pool()
+  let http = transport.Policy(..policy, pool: Some(pool))
+  let started =
+    start_supervised(
+      config,
+      clock,
+      monotonic,
+      transport.pool_child(policy, pool),
+      supervision.worker(fn() {
+        provider.start(provider_name, issuer, http, Some(discovered))
+        |> result.map(fn(started) { actor.Started(..started, data: Nil) })
+      }),
+      native.new(config, provider_handle, http, clock),
+      to_dynamic(provider_name),
+      http,
+    )
+  case started {
+    Ok(client) -> Ok(client)
+    Error(error) -> {
+      transport.release(pool)
+      Error(error)
+    }
+  }
 }
 
 fn start_supervised(
   config: Config,
   clock: fn() -> Int,
   monotonic: fn() -> Int,
+  http_child: supervision.ChildSpecification(Nil),
   provider_child: supervision.ChildSpecification(Nil),
   backend: native.Client,
   provider_name: Dynamic,
+  http: transport.Policy,
 ) -> Result(Client, StartError) {
   let transaction_name = process.new_name("warden_transactions")
   let custody_name = process.new_name("warden_custody")
@@ -255,6 +280,7 @@ fn start_supervised(
   let started =
     supervisor.new(supervisor.OneForOne)
     |> supervisor.restart_tolerance(intensity: 10, period: 60)
+    |> supervisor.add(http_child)
     |> supervisor.add(provider_child)
     |> supervisor.add(
       supervision.worker(fn() {
@@ -298,6 +324,7 @@ fn start_supervised(
         clock:,
         monotonic:,
         provider_name:,
+        http:,
       ))
     }
   }
@@ -2046,7 +2073,7 @@ fn transport_reason(class: String) -> TransportReason {
     "body_too_large" -> ResponseTooLarge
     "headers_too_large" -> ResponseHeadersTooLarge
     "malformed_response" -> MalformedHttp
-    "truncated_body" -> TruncatedResponse
+    "receive_failed" -> ReceiveFailed
     "unsupported_content_encoding" -> UnsupportedContentEncoding
     _ -> OtherTransportFailure
   }
@@ -2078,6 +2105,12 @@ pub fn transaction_store(client: Client) -> transactions.Store {
 @internal
 pub fn custody_owner(client: Client) -> custody.Store(VerifiedIdentity) {
   client.custody
+}
+
+/// The transport policy the client's requests use (test support).
+@internal
+pub fn http_policy(client: Client) -> transport.Policy {
+  client.http
 }
 
 /// Registered name of the provider cache process.

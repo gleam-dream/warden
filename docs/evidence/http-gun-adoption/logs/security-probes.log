@@ -1,0 +1,14 @@
+  gun_security_probe_test: ipv6_literal_authority_is_bracketed_test...EVIDENCE ipv6 non-default port heads: ["get /x http/1.1\r\ncontent-length: 0\r\nhost: [::1]:57761\r\nuser-agent: warden"]
+EVIDENCE ipv6 port 443: cannot bind [::1]:443 here; not probed
+  gun_security_probe_test: metadata_addresses_stay_refused_under_private_permission_test...ok
+  gun_security_probe_test: a_peer_that_never_reads_ends_at_the_deadline_test...EVIDENCE stalled 64 KiB POST: Error(Failure(Sent, Timeout)) after 504 ms (deadline 500)
+  gun_security_probe_test: connections_are_reused_and_replacements_resolve_again_test...EVIDENCE reuse: resolutions 1, connections 1
+EVIDENCE replacement: resolutions 2, connections 2
+  gun_security_probe_test: caller_death_leaves_the_shared_client_healthy_test...EVIDENCE after caller death: Stats(0, 0, 0)
+  gun_security_probe_test: shutdown_is_bounded_and_fails_inflight_requests_test...EVIDENCE stop took 0 ms; in-flight request: Error(Failure(Closed, MayHaveBeenSent))
+  gun_security_probe_test: timed_out_requests_leave_the_caller_mailbox_clean_test...EVIDENCE mailbox before 0, after 0
+  gun_security_probe_test: stale_connection_after_peer_close_test...EVIDENCE after peer close + 100 ms: Ok(200), connections 2
+EVIDENCE after peer close + 1000 ms: Ok(200), connections 2
+EVIDENCE after peer close + 3000 ms: Ok(200), connections 2
+  gun_security_probe_test: connection_close_prevents_reuse_test...EVIDENCE connection: close twice: #("Ok(200)", "Ok(200)"), server connections 2, pool Stats(0, 0, 0)
+  All 9 tests passed.

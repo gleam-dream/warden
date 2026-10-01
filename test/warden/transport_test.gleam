@@ -1,7 +1,9 @@
 //// The Gleam transport against real local TLS servers (probe P2, gate V6).
 
 import gleam/bit_array
+import gleam/dynamic.{type Dynamic}
 import gleam/dynamic/decode
+import gleam/int
 import gleam/json
 import gleam/list
 import gleam/option.{None, Some}
@@ -111,8 +113,10 @@ pub fn response_bounds_test() {
     #(support.ManyHeaders, transport.HeadersTooLarge),
     #(support.BigHeaderLine, transport.HeadersTooLarge),
     #(support.Gzip, transport.UnsupportedContentEncoding),
-    #(support.Truncated, transport.TruncatedBody),
-    #(support.BadStatus, transport.MalformedResponse),
+    // Owner decision D17: Gun reports these only as a peer close or a
+    // dependency crash, so they are rejections without a finer class.
+    #(support.Truncated, transport.ReceiveFailed),
+    #(support.BadStatus, transport.ReceiveFailed),
   ]
   list.each(cases, fn(c) {
     use s <- with_server("localhost", c.0)
@@ -319,23 +323,64 @@ pub fn large_request_bodies_are_refused_before_send_test() {
 pub fn lenient_framing_is_refused_test() {
   list.each(
     [
-      support.BareLfHead,
-      support.SignedContentLength,
-      support.ControlInHeader,
-      support.SignedChunkSize,
+      #(support.ControlInHeader, transport.MalformedResponse),
+      // Owner decision D17: rejected, reported without a finer class.
+      #(support.SignedContentLength, transport.ReceiveFailed),
+      #(support.SignedChunkSize, transport.ReceiveFailed),
     ],
-    fn(kind) {
-      use s <- with_server("localhost", kind)
-      assert #(kind, get(policy(), support.server_url(s, "/x")))
-        == #(kind, Error(Failure(Sent, transport.MalformedResponse)))
+    fn(c) {
+      use s <- with_server("localhost", c.0)
+      assert #(c.0, get(policy(), support.server_url(s, "/x")))
+        == #(c.0, Error(Failure(Sent, c.1)))
     },
   )
 }
 
-/// IPv6 literals are bracketed in the Host header on every port (T6).
+/// Owner decision D17 (accepted HTTP Gun limitation): a bare LF in the
+/// status line is read as part of the reason phrase, which Gun discards, and
+/// the body is read to the connection's close. Nothing reaches another
+/// request: the connection is not reused after a close-delimited body.
+pub fn bare_lf_in_status_line_is_read_as_reason_phrase_test() {
+  use s <- with_server("localhost", support.BareLfHead)
+  let assert Ok(response) = get(policy(), support.server_url(s, "/x"))
+  assert response.status == 200
+  assert response.headers == []
+  assert response.body == <<"ok":utf8>>
+}
+
+/// IPv6 literals are bracketed in the Host header HTTP Gun sends (T6).
+/// The default port 443 cannot be bound by an unprivileged test.
 pub fn host_header_brackets_ipv6_literals_test() {
-  assert transport.authority("::1", 443) == "[::1]"
-  assert transport.authority("::1", 8443) == "[::1]:8443"
-  assert transport.authority("idp.example", 443) == "idp.example"
-  assert transport.authority("idp.example", 8443) == "idp.example:8443"
+  let #(port, server) = probe_capture_server(ipv6_loopback(), 0, "ipv6")
+  let p = int.to_string(port)
+  let assert Ok(response) = get(policy(), "https://[::1]:" <> p <> "/x")
+  assert response.status == 200
+  let heads =
+    probe_heads(server)
+    |> list.filter_map(bit_array.to_string)
+    |> list.map(string.lowercase)
+  assert list.any(heads, string.contains(_, "host: [::1]:" <> p <> "\r\n"))
+  probe_stop(server)
+}
+
+type ProbeServer
+
+@external(erlang, "warden_transport_probe_ffi", "capture_server")
+fn probe_capture_server(
+  address: Dynamic,
+  port: Int,
+  cert: String,
+) -> #(Int, ProbeServer)
+
+@external(erlang, "warden_transport_probe_ffi", "heads")
+fn probe_heads(server: ProbeServer) -> List(BitArray)
+
+@external(erlang, "warden_transport_probe_ffi", "stop")
+fn probe_stop(server: ProbeServer) -> Nil
+
+@external(erlang, "gleam_stdlib", "identity")
+fn to_dynamic(value: a) -> Dynamic
+
+fn ipv6_loopback() -> Dynamic {
+  to_dynamic(#(0, 0, 0, 0, 0, 0, 0, 1))
 }

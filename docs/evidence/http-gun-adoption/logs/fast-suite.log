@@ -1,0 +1,16 @@
+124 passed, 2 failures
+ok   access_token_as_binding
+ok   forged_access_token
+ok   forged_browser_binding
+ok   forged_config
+ok   forged_custody_recovery
+ok   forged_identity
+ok   forged_session
+ok   forged_userinfo
+ok   introspection_is_not_identity
+ok   reservation_as_publication_recovery
+ok   secret_is_not_readable
+ok   session_is_not_recovery
+ok   userinfo_is_not_identity
+ok   positive control
+8 passed, no failures

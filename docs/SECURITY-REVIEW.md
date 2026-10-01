@@ -87,3 +87,26 @@ them. Covered by the VM-introspection duty in
 
 - J10: refresh keys once on `bad_signature` when the token's `kid` matched no
   key (availability during rotation with kid-less keys).
+
+## HTTP Gun adoption (2026-10-01; adopted by local path)
+
+Warden's transport findings were re-run against HTTP Gun `369da4f`
+([validation](evidence/http-gun-adoption/README.md)); the transport now runs
+on HTTP Gun (D11), by local path until publication (D16), with the
+classification differences below accepted (D17). The transport tests and the
+pooled-path regression tests run in the fast suite.
+
+| Finding                       | Through HTTP Gun                                                                                                                                                                                                                                 |
+| ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| T1 IP-literal name check      | held (IP SAN verified, wrong-host refused)                                                                                                                                                                                                       |
+| T2, T8 address classes        | held (same table, metadata reserved under private permission)                                                                                                                                                                                    |
+| T3 stalled send, request cap  | held (deadline at about 502 ms of 500; cap in the adapter and HTTP Gun)                                                                                                                                                                          |
+| T4 complete header limit      | held (count and bytes, including Gun's own limit)                                                                                                                                                                                                |
+| T5 close-delimited truncation | unchanged; documented in both                                                                                                                                                                                                                    |
+| T6 IPv6 authority             | held for non-default ports; default port not probed (port 443 unavailable here)                                                                                                                                                                  |
+| T7 strict framing             | four malformed responses still rejected, classified `ReceiveFailed` (D17); a bare LF in the status line is read as the discarded reason phrase and the body is read to close, confining it to its connection (D17, accepted HTTP Gun limitation) |
+| F4 caller mailbox             | held                                                                                                                                                                                                                                             |
+| Connection reuse              | an earlier revision sent requests on closing connections (would lose code exchanges); fixed in `369da4f` and verified by probes                                                                                                                  |
+
+The check also found a Warden test defect: the raw-oidcc differential helper
+still called the module deleted in D13, masked by a stale compiled beam (fixed).

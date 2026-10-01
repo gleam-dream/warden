@@ -42,10 +42,15 @@ raw_login(Mutation, _Unused) ->
     exit(Pid, shutdown),
     case Result of
         {ok, _} -> <<"accepted">>;
-        {error, Reason} ->
-            {Kind, Detail} = warden_oidcc:classify(Reason),
-            iolist_to_binary(["rejected:", atom_to_list(Kind), ":", io_lib:format("~p", [Detail])])
+        {error, Reason} -> iolist_to_binary(["rejected:", reason_tag(Reason)])
     end.
+
+%% A short tag for the printed table: the reason's atom or leading tag. The
+%% differential compares only accepted/rejected; raw details are not printed.
+reason_tag(Reason) when is_atom(Reason) -> atom_to_list(Reason);
+reason_tag(Reason) when is_tuple(Reason), tuple_size(Reason) > 0, is_atom(element(1, Reason)) ->
+    atom_to_list(element(1, Reason));
+reason_tag(_) -> "other".
 
 wait(_, 0) -> error(not_ready);
 wait(Name, N) ->

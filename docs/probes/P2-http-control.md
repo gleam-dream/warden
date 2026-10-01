@@ -1,5 +1,9 @@
 # P2 — HTTP control: TLS, destinations, redirects, deadlines, response size
 
+> **Status (D11, 2026-10-01).** The transport now runs on HTTP Gun; Warden keeps
+> application policy only. The cases below remain in `test/warden/transport_test.gleam`
+> (five rows with accepted coarser classes, D17).
+
 > **Revised by D11 (2026-09-30).** The Erlang adapter `src/warden_http.erl`
 > and its tests were replaced by the Gleam transport
 > `src/warden/internal/transport.gleam` (with the oidcc adapter in

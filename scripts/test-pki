@@ -1,14 +1,13 @@
 #!/bin/sh
 # Generate the disposable test PKI in build/test-pki (if missing) with OpenSSL:
 # a test CA, a localhost leaf (SAN localhost, 127.0.0.1), a wrong-host leaf,
-# an expired leaf and a leaf from an untrusted CA. Keys never leave build/.
+# an expired leaf, a leaf from an untrusted CA and an IPv6-literal leaf
+# (SAN ::1, 127.0.0.1). Keys never leave build/.
 # OpenSSL is used because browsers reject certificates whose RSA algorithm
 # identifiers omit NULL parameters, as Erlang's pkix_test_data produces.
 set -eu
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 DIR="$ROOT/build/test-pki"
-[ -f "$DIR/ca.pem" ] && [ "${1:-}" != "--force" ] && exit 0
-rm -rf "$DIR"; mkdir -p "$DIR"; cd "$DIR"
 q() { "$@" >/dev/null 2>&1; }
 ca() { # name subject
   q openssl req -x509 -newkey rsa:2048 -nodes -keyout "$1.cakey" -out "$1.pem" -days 3650 -sha256 \
@@ -26,6 +25,13 @@ leaf() { # name ca san [not_before not_after]
   fi
   rm -f "$1.csr" "$1.ext"
 }
+if [ -f "$DIR/ca.pem" ] && [ "${1:-}" != "--force" ]; then
+  # Existing PKI: add leaves introduced later, keep everything else.
+  cd "$DIR"
+  [ -f ipv6.pem ] || { leaf ipv6 ca "IP:::1,IP:127.0.0.1"; chmod 600 ipv6.key; }
+  exit 0
+fi
+rm -rf "$DIR"; mkdir -p "$DIR"; cd "$DIR"
 ca ca "Warden Test CA"
 ca untrusted "Untrusted Test CA"
 leaf localhost ca "DNS:localhost,IP:127.0.0.1"
@@ -33,5 +39,6 @@ leaf wrong_host ca "DNS:wrong.example"
 leaf expired ca "DNS:localhost" 20200101000000Z 20210101000000Z
 leaf self_signed untrusted "DNS:localhost"
 leaf conformance ca "DNS:localhost.emobix.co.uk,DNS:localhost"
+leaf ipv6 ca "IP:::1,IP:127.0.0.1"
 rm -f untrusted.pem
 chmod 600 ./*.key ./*.cakey

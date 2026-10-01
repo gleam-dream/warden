@@ -3,9 +3,11 @@
 A typed Gleam OpenID Connect relying party and OAuth 2.0 client for
 Erlang/OTP. Warden owns discovery, key caching, the provider requests and the
 OpenID claim rules; signatures and keys are handled by
-[gose](https://github.com/jtdowney/gose) and kryptos, and HTTPS by Warden's
-own bounded transport over OTP `ssl`. The package contains no handwritten
-Erlang. [oidcc](https://github.com/erlef/oidcc) 3.9.0 is used only in tests,
+[gose](https://github.com/jtdowney/gose) and kryptos, and HTTPS by
+[HTTP Gun](https://github.com/gleam-dream/http_gun) (destination policy,
+pinned DNS, verified TLS, bounded responses) under Warden's application
+policy. The package contains no handwritten Erlang. HTTP Gun and Sinal are
+local path dependencies until they are published. [oidcc](https://github.com/erlef/oidcc) 3.9.0 is used only in tests,
 as a differential oracle.
 
 Status: **unreleased, pre-production.** The accepted design is

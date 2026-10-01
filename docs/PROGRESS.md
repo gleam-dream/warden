@@ -31,18 +31,18 @@ before relying on conversation history. Closed-wave entries are append-only.
 
 ## Current state
 
-- Waves W0–W10 executed (2026-09-30 to 2026-10-01). Branch
+- Waves W0–W12 executed (2026-09-30 to 2026-10-01). Branch
   `warden-implementation` (local, not pushed). Repository private; no release
   published.
-- One backend: Gleam-native on gose 2.2.0 + kryptos 1.5.0 with Warden's
-  transport over OTP `ssl` (D10, D11). The oidcc backend was removed before
+- One backend: Gleam-native on gose 2.2.0 + kryptos 1.5.0, HTTPS on HTTP
+  Gun by local path (D10, D11, D16). The oidcc backend was removed before
   the first release (D13); oidcc 3.9.0 and erlang-jose remain test-only
   oracles. `src/` contains no Erlang.
 - Results on the final tree (2026-10-01):
 
 | Suite                                         | Command                                                  | Result                                                                                        |
 | --------------------------------------------- | -------------------------------------------------------- | --------------------------------------------------------------------------------------------- |
-| Fast gate                                     | `nix develop -c scripts/check`                           | 116 pass; 13 negative compile cases + positive control; consumer 8 pass                       |
+| Fast gate                                     | `nix develop -c scripts/check`                           | 127 pass; 13 negative compile cases + positive control; consumer 8 pass                       |
 | Keycloak 26.7.5                               | `scripts/keycloak up; WARDEN_SUITE=keycloak gleam test`  | 15 pass (includes raw-oidcc probe P1)                                                         |
 | node-oidc-provider 9.12.2 + panva/jose 6.2.12 | `scripts/node-provider up; WARDEN_SUITE=node gleam test` | 7 pass (21-token corpus, 5 client-auth methods, 22-scenario raw-oidcc differential, probe P3) |
 | Dex v2.45.1, Ory Hydra v26.2.0                | `scripts/interop up; WARDEN_SUITE=interop gleam test`    | 2 pass                                                                                        |
@@ -76,6 +76,7 @@ before relying on conversation history. Closed-wave entries are append-only.
 | W9   | PKCE opt-in (D7); oidcc backend removed (D13)                         | Every suite on the single backend                        |
 | W10  | Internal security review and fixes                                    | [SECURITY-REVIEW.md](SECURITY-REVIEW.md); every suite    |
 | W11  | Review follow-ups: session lifetime, clock tolerance, monotonic clock | Every suite                                              |
+| W12  | HTTP Gun transport (D11, D16, D17)                                    | Every suite on HTTP Gun                                  |
 
 ## Decision register
 
@@ -234,6 +235,22 @@ See [decisions.md](decisions.md).
   token validation.
 - Each change test-first (`3057c47`, `6950b4f`, `b1cf370`).
 
+### W12 — transport on HTTP Gun (closed 2026-10-01)
+
+- Validated HTTP Gun in isolation (`b517725`, then `369da4f` after G1–G3
+  were fixed upstream); adopted by local path (D16) with five coarser
+  transport classes accepted (D17).
+- Warden's DNS, TLS, socket and HTTP parsing removed; `transport.gleam`
+  keeps application policy and the failure mapping. Each Warden client owns
+  a supervised shared HTTP Gun client; startup discovery uses a one-shot
+  client. Public `TransportReason.TruncatedResponse` replaced by
+  `ReceiveFailed`.
+- New tests: pooled reuse, replacement after a peer close, restart, released
+  pool, caller death, stalled peer, mailbox, metadata, IPv6 Host header,
+  client pool ownership; test PKI gains an IPv6 leaf.
+- Found on the way: the raw-oidcc differential helper still called a module
+  deleted in D13, masked by a stale compiled beam (fixed).
+
 ## Remaining limitations and gaps
 
 - Production readiness requires the design's release gates and an
@@ -253,8 +270,8 @@ See [decisions.md](decisions.md).
   `exp`.
 - No fallback backend (D13): a native-backend defect has no configuration
   workaround; the oidcc path remains in git history.
-- Path dependency `sinal = { path = "../sinal" }` until sinal publishes a
-  release with the stdlib widening (merged locally, `098a2d5`).
+- Path dependencies `http_gun` and `sinal` until both are published (D16);
+  Warden cannot be published before then.
 - gose 2.2.0 rejects JWKs with X.509 members: issue drafted, not filed
   ([draft](handoff/gose-x509-jwk-issue.md)).
 - Upstream defects found but not reported: oidcc `has_kid/2` and the

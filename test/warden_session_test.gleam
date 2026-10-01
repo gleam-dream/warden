@@ -486,3 +486,21 @@ pub fn idle_sessions_end_test() {
   warden.stop(client)
   support.provider_stop(provider)
 }
+
+/// A provider that closes the connection without answering: the request may
+/// have been sent, and the public reason is `ReceiveFailed` (decision D17).
+pub fn a_closed_connection_reports_receive_failed_test() {
+  let provider = support.provider_start(support.Standard)
+  let client = start(settings(provider))
+  let session = logged_in(provider, client)
+  support.script(provider, support.Userinfo, support.Close)
+  assert warden.userinfo(client, session)
+    == Error(
+      warden.UserinfoFailed(warden.TransportFailure(
+        sent: True,
+        reason: warden.ReceiveFailed,
+      )),
+    )
+  warden.stop(client)
+  support.provider_stop(provider)
+}

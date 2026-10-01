@@ -1,0 +1,24 @@
+  warden@transport_test: verified_tls_succeeds_test...[0.171 s] ok
+  warden@transport_test: loopback_rejected_by_default_before_connect_test...[0.053 s] ok
+  warden@transport_test: certificate_failures_are_rejected_before_send_test...=NOTICE REPORT==== 1-Oct-2026::15:04:15.138688 ===
+  warden@transport_test: ip_literal_hosts_are_verified_against_the_certificate_test...=NOTICE REPORT==== 1-Oct-2026::15:04:15.188008 ===
+  warden@transport_test: system_trust_does_not_accept_the_test_ca_test...=NOTICE REPORT==== 1-Oct-2026::15:04:15.240424 ===
+  warden@transport_test: redirect_is_returned_not_followed_test...[0.055 s] ok
+  warden@transport_test: response_bounds_test...*failed*
+        value => {truncated,{error,{failure,sent,receive_failed}}},
+        value => {truncated,{error,{failure,sent,truncated_body}}},
+  warden@transport_test: chunked_and_interim_responses_decode_test...[0.018 s] ok
+  warden@transport_test: deadline_covers_the_exchange_test...[0.303 s] ok
+  warden@transport_test: request_shape_is_validated_before_send_test...[0.002 s] ok
+  warden@transport_test: connection_refused_is_not_sent_test...[0.002 s] ok
+  warden@transport_test: destination_policy_test...[0.001 s] ok
+  warden@transport_test: resolution_happens_once_test...[0.006 s] ok
+  warden@transport_test: classify_address_test...ok
+  warden@transport_test: oidcc_adapter_reduces_error_bodies_test...[0.024 s] ok
+  warden@transport_test: header_limit_covers_the_final_read_test...[0.005 s] ok
+  warden@transport_test: large_request_bodies_are_refused_before_send_test...[0.051 s] ok
+  warden@transport_test: lenient_framing_is_refused_test...*failed*
+        value => {bare_lf_head,{ok,{response,200,[],<<"ok">>}}},
+        value => {bare_lf_head,{error,{failure,sent,malformed_response}}},
+  warden@transport_test: host_header_brackets_ipv6_literals_test...ok
+  Failed: 2.  Skipped: 0.  Passed: 17.
