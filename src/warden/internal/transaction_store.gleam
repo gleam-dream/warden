@@ -10,9 +10,16 @@
 //// Terminal records (consumed, expired) are kept for the retention window so
 //// a losing or late callback reports replay or expiry rather than an unknown
 //// transaction; they are removed afterwards to bound memory.
+////
+//// Bounds under unauthenticated load: `capacity` limits pending logins
+//// only. Terminal records have their own budget of the same size and are
+//// evicted oldest first. Expiry and eviction run incrementally from
+//// insertion-ordered queues, so a full store rejects a new login in constant
+//// time instead of scanning every record.
 
 import gleam/dict.{type Dict}
 import gleam/erlang/process.{type Subject}
+import gleam/list
 import gleam/option.{type Option}
 import gleam/otp/actor
 import warden/internal/call.{type CallError}
@@ -71,7 +78,30 @@ type State {
     capacity: Int,
     retention: Int,
     next_revision: Int,
+    pending: Int,
+    terminal: Int,
+    /// Pending logins in insertion order: #(expires_at, key, revision).
+    expiry: Fifo(#(Int, String, Int)),
+    /// Terminal records in creation order: #(at, key).
+    graves: Fifo(#(Int, String)),
   )
+}
+
+/// A first-in, first-out queue with amortised constant-time operations.
+type Fifo(a) {
+  Fifo(front: List(a), back: List(a))
+}
+
+fn push(queue: Fifo(a), item: a) -> Fifo(a) {
+  Fifo(..queue, back: [item, ..queue.back])
+}
+
+fn peek(queue: Fifo(a)) -> Result(#(a, Fifo(a)), Nil) {
+  case queue {
+    Fifo(front: [first, ..rest], back:) -> Ok(#(first, Fifo(rest, back)))
+    Fifo(front: [], back: []) -> Error(Nil)
+    Fifo(front: [], back:) -> peek(Fifo(list.reverse(back), []))
+  }
 }
 
 pub type Store {
@@ -90,6 +120,10 @@ pub fn start(
     capacity:,
     retention:,
     next_revision: 1,
+    pending: 0,
+    terminal: 0,
+    expiry: Fifo([], []),
+    graves: Fifo([], []),
   ))
   |> actor.named(name)
   |> actor.on_message(handle)
@@ -99,21 +133,32 @@ pub fn start(
 fn handle(state: State, message: Message) -> actor.Next(State, Message) {
   case message {
     Put(key, material, reply) -> {
-      let state = case dict.size(state.records) >= state.capacity {
-        True -> sweep(state)
-        False -> state
-      }
-      case dict.size(state.records) >= state.capacity {
+      let state = maintain(state)
+      case state.pending >= state.capacity {
         True -> {
           process.send(reply, CapacityExceeded)
           actor.continue(state)
         }
         False -> {
           let revision = state.next_revision
+          let #(pending, terminal) = case dict.get(state.records, key) {
+            Ok(Pending(..)) -> #(state.pending, state.terminal)
+            Ok(_) -> #(state.pending + 1, state.terminal - 1)
+            Error(Nil) -> #(state.pending + 1, state.terminal)
+          }
           let records =
             dict.insert(state.records, key, Pending(material:, revision:))
           process.send(reply, Stored(revision))
-          actor.continue(State(..state, records:, next_revision: revision + 1))
+          actor.continue(
+            State(
+              ..state,
+              records:,
+              next_revision: revision + 1,
+              pending:,
+              terminal:,
+              expiry: push(state.expiry, #(material.expires_at, key, revision)),
+            ),
+          )
         }
       }
     }
@@ -128,9 +173,9 @@ fn handle(state: State, message: Message) -> actor.Next(State, Message) {
       actor.continue(state)
     }
     Consume(key, revision, reply) -> {
-      let #(decision, records) = decide(state, key, revision)
+      let #(decision, state) = decide(state, key, revision)
       process.send(reply, decision)
-      actor.continue(State(..state, records:))
+      actor.continue(prune(state, state.clock()))
     }
     Hold(reply) -> {
       let release = process.new_subject()
@@ -144,53 +189,90 @@ fn handle(state: State, message: Message) -> actor.Next(State, Message) {
 /// The consumption transition. A terminal record takes precedence over the
 /// revision comparison; a pending revision mismatch rejects before expiry or
 /// mutation; the clock is sampled here, inside the critical section.
-fn decide(
-  state: State,
-  key: String,
-  revision: Int,
-) -> #(Decision, Dict(String, Record)) {
+fn decide(state: State, key: String, revision: Int) -> #(Decision, State) {
   case dict.get(state.records, key) {
-    Error(Nil) -> #(Missing, state.records)
-    Ok(ConsumedRecord(..)) -> #(AlreadyConsumed, state.records)
-    Ok(ExpiredRecord(..)) -> #(Expired, state.records)
+    Error(Nil) -> #(Missing, state)
+    Ok(ConsumedRecord(..)) -> #(AlreadyConsumed, state)
+    Ok(ExpiredRecord(..)) -> #(Expired, state)
     Ok(Pending(revision: current, ..)) if current != revision -> #(
       Changed,
-      state.records,
+      state,
     )
     Ok(Pending(material:, revision: current)) -> {
       let now = state.clock()
       case now < material.expires_at {
         True -> #(
           Consumed(material),
-          dict.insert(state.records, key, ConsumedRecord(current, now)),
+          retire(state, key, ConsumedRecord(current, now), now),
         )
         False -> #(
           Expired,
-          dict.insert(state.records, key, ExpiredRecord(current, now)),
+          retire(state, key, ExpiredRecord(current, now), now),
         )
       }
     }
   }
 }
 
-/// Remove terminal records past retention and convert expired pending
-/// records into (retained) expired tombstones.
-fn sweep(state: State) -> State {
+/// Replace a pending record with a terminal one.
+fn retire(state: State, key: String, record: Record, now: Int) -> State {
+  State(
+    ..state,
+    records: dict.insert(state.records, key, record),
+    pending: state.pending - 1,
+    terminal: state.terminal + 1,
+    graves: push(state.graves, #(now, key)),
+  )
+}
+
+/// Expire pending logins past their deadline, then prune terminal records.
+fn maintain(state: State) -> State {
   let now = state.clock()
-  let records =
-    dict.fold(state.records, dict.new(), fn(acc, key, record) {
-      case record {
-        Pending(material:, revision:) if now >= material.expires_at ->
-          dict.insert(acc, key, ExpiredRecord(revision, now))
-        Pending(..) -> dict.insert(acc, key, record)
-        ConsumedRecord(at:, ..) | ExpiredRecord(at:, ..) ->
-          case now - at > state.retention {
-            True -> acc
-            False -> dict.insert(acc, key, record)
-          }
+  prune(expire(state, now), now)
+}
+
+fn expire(state: State, now: Int) -> State {
+  case peek(state.expiry) {
+    Ok(#(#(expires_at, key, revision), rest)) if expires_at <= now -> {
+      let state = State(..state, expiry: rest)
+      case dict.get(state.records, key) {
+        // Still the same pending login: it becomes an expired tombstone.
+        Ok(Pending(revision: current, ..)) if current == revision ->
+          expire(retire(state, key, ExpiredRecord(revision, now), now), now)
+        // Already consumed, expired at the callback, or replaced.
+        _ -> expire(state, now)
       }
-    })
-  State(..state, records:)
+    }
+    _ -> state
+  }
+}
+
+/// Drop terminal records past retention, and the oldest beyond the terminal
+/// budget (`capacity`).
+fn prune(state: State, now: Int) -> State {
+  case peek(state.graves) {
+    Ok(#(#(at, key), rest))
+      if now - at > state.retention || state.terminal > state.capacity
+    -> {
+      let state = State(..state, graves: rest)
+      case dict.get(state.records, key) {
+        Ok(ConsumedRecord(at: recorded, ..))
+          | Ok(ExpiredRecord(at: recorded, ..))
+          if recorded == at
+        ->
+          prune(
+            State(
+              ..state,
+              records: dict.delete(state.records, key),
+              terminal: state.terminal - 1,
+            ),
+            now,
+          )
+        _ -> prune(state, now)
+      }
+    }
+    _ -> state
+  }
 }
 
 // ---------------------------------------------------------------------------
