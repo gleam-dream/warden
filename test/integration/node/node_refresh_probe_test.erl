@@ -14,11 +14,7 @@
 -define(REDIRECT, <<"https://localhost:1/callback">>).
 
 adapter(Timeout) ->
-    {warden_http, #{
-        cacerts => [warden_test_pki:ca_der(warden_test_server:pki_dir())],
-        allow_loopback => true,
-        timeout => Timeout
-    }}.
+    warden_test_support:test_adapter(Timeout).
 
 opts() -> opts(10000).
 opts(Timeout) -> #{preferred_auth_methods => [client_secret_basic], request_opts => #{http_adapter => adapter(Timeout)}}.

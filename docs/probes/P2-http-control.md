@@ -1,5 +1,11 @@
 # P2 — HTTP control: TLS, destinations, redirects, deadlines, response size
 
+> **Revised by D11 (2026-09-30).** The Erlang adapter `src/warden_http.erl`
+> and its tests were replaced by the Gleam transport
+> `src/warden/internal/transport.gleam` (with the oidcc adapter in
+> `src/warden/internal/oidcc_transport.gleam`); the cases below are now in
+> `test/warden/transport_test.gleam`. Policy and behaviour are unchanged.
+
 Executable evidence: `test/warden_http_test.erl` (fast suite, real local TLS
 servers from `test/warden_test_server.erl`, disposable PKI from
 `test/warden_test_pki.erl`).

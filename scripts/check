@@ -7,7 +7,8 @@ ROOT=$(cd "$(dirname "$0")/.." && pwd)
 cd "$ROOT"
 echo "== format"; gleam format --check src test
 echo "== build"; gleam build --warnings-as-errors
-echo "== fast suite"; WARDEN_SUITE=fast gleam test
+echo "== fast suite (native backend)"; WARDEN_SUITE=fast WARDEN_BACKEND=native gleam test
+echo "== fast suite (oidcc backend)"; WARDEN_SUITE=fast WARDEN_BACKEND=oidcc gleam test
 if [ -x scripts/negative ]; then echo "== negative compile tests"; scripts/negative; fi
 if [ -d consumer ]; then echo "== consumer"; (cd consumer && gleam format --check src test && gleam build --warnings-as-errors && gleam test); fi
 echo "fast gate: ok"

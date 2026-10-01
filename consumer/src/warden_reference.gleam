@@ -15,9 +15,12 @@
 //// | `WARDEN_ALLOW_LOOPBACK` | `1` to allow loopback providers (tests only) |
 //// | `WARDEN_TLS_CERT`, `WARDEN_TLS_KEY` | Serve HTTPS with these files |
 //// | `WARDEN_LOGIN_LIFETIME` | Pending-login lifetime in seconds (default 600) |
+//// | `WARDEN_BACKEND` | `native` (default) or `oidcc` |
 //// | `PORT` | Listening port (default 18080) |
 
 import envoy
+import gleam/dynamic.{type Dynamic}
+import gleam/erlang/atom
 import gleam/erlang/process
 import gleam/int
 import gleam/io
@@ -26,8 +29,10 @@ import gleam/result
 import gleam/string
 import mist
 import simplifile
+import sinal
 import warden
 import warden/config
+import warden/observation
 import warden_reference/web
 import wisp
 import wisp/wisp_mist
@@ -58,6 +63,10 @@ pub fn main() -> Nil {
       |> list.filter(fn(s) { s != "" }),
     )
     |> config.with_response_mode(response_mode)
+    |> config.with_backend(case env("WARDEN_BACKEND", "native") {
+      "oidcc" -> config.OidccBackend
+      _ -> config.NativeBackend
+    })
     |> config.with_login_lifetime(
       env("WARDEN_LOGIN_LIFETIME", "600") |> int.parse |> result.unwrap(600),
     )
@@ -77,6 +86,7 @@ pub fn main() -> Nil {
     Error(errors) ->
       panic as { "invalid configuration: " <> string.inspect(errors) }
   }
+  log_outbound_requests()
   // WARDEN_CONFORMANCE_ASSUME_S256=1 selects a non-default, internal
   // harness policy (see warden.start_assuming_s256_for_conformance).
   let started = case env("WARDEN_CONFORMANCE_ASSUME_S256", "") {
@@ -110,3 +120,47 @@ pub fn main() -> Nil {
   io.println("warden reference RP listening on " <> base_url)
   process.sleep_forever()
 }
+
+/// One log line per outbound Warden request, from the typed observation
+/// event. The event holds no secrets, so it is safe to print whole.
+fn log_outbound_requests() -> Nil {
+  // Attaching needs the telemetry application running; before
+  // `warden.start` that is the application's job.
+  let assert True = start_telemetry()
+  let assert Ok(id) = sinal.handler_id("warden-reference-http")
+  let assert Ok(_) =
+    sinal.observe(id, observation.http_request(), fn(measurements, request) {
+      let outcome = case request.outcome {
+        observation.Status(code) -> int.to_string(code)
+        observation.Failed(sent: True, class:) -> "failed after send: " <> class
+        observation.Failed(sent: False, class:) -> "not sent: " <> class
+      }
+      let method = case request.method {
+        observation.Get -> "GET"
+        observation.Post -> "POST"
+      }
+      io.println(
+        "warden http "
+        <> method
+        <> " "
+        <> request.host
+        <> request.path
+        <> " -> "
+        <> outcome
+        <> " ("
+        <> int.to_string(measurements.duration_ms)
+        <> " ms)",
+      )
+    })
+  Nil
+}
+
+fn start_telemetry() -> Bool {
+  case ensure_all_started(atom.create("telemetry")) {
+    Ok(_) -> True
+    Error(_) -> False
+  }
+}
+
+@external(erlang, "application", "ensure_all_started")
+fn ensure_all_started(application: atom.Atom) -> Result(Dynamic, Dynamic)

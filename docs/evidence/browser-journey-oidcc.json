@@ -1,6 +1,6 @@
 {
   "chrome": "installed Google Chrome",
-  "backend": "native",
+  "backend": "oidcc",
   "results": [
     {
       "name": "query login shows verified identity and custom claim",

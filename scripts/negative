@@ -11,7 +11,7 @@ name = "negative"
 version = "0.0.0"
 target = "erlang"
 [dependencies]
-gleam_stdlib = ">= 0.70.0 and < 1.0.0"
+gleam_stdlib = ">= 0.70.0 and < 2.0.0"
 warden = { path = "$ROOT" }
 TOML
 cp "$ROOT/manifest.toml" "$WORK/manifest.toml" 2>/dev/null || true

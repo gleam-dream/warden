@@ -1,0 +1,352 @@
+{
+  "suite": "release-v5.3.1",
+  "backend": "native",
+  "issuer": "https://localhost.emobix.co.uk:8443/test/a/warden/",
+  "policy": "NON-DEFAULT: S256 assumed without metadata advertisement (decision D7 pending)",
+  "summary": [
+    {
+      "module": "oidcc-client-test",
+      "id": "90XvXU0iy6ctyll",
+      "status": "FINISHED",
+      "result": "PASSED",
+      "notes": ["login → 200 /"],
+      "plan": "oidcc-client-basic-certification-test-plan"
+    },
+    {
+      "module": "oidcc-client-test-invalid-iss",
+      "id": "TE3ZJ8nyVHQPRZa",
+      "status": "FINISHED",
+      "result": "PASSED",
+      "notes": ["login → 401 /callback"],
+      "plan": "oidcc-client-basic-certification-test-plan"
+    },
+    {
+      "module": "oidcc-client-test-missing-sub",
+      "id": "m2nWoTidOm21PzY",
+      "status": "FINISHED",
+      "result": "PASSED",
+      "notes": ["login → 401 /callback"],
+      "plan": "oidcc-client-basic-certification-test-plan"
+    },
+    {
+      "module": "oidcc-client-test-invalid-aud",
+      "id": "26cnl0nicdtGXhb",
+      "status": "FINISHED",
+      "result": "PASSED",
+      "notes": ["login → 401 /callback"],
+      "plan": "oidcc-client-basic-certification-test-plan"
+    },
+    {
+      "module": "oidcc-client-test-missing-iat",
+      "id": "Be6GkLJpIUk0S2q",
+      "status": "FINISHED",
+      "result": "PASSED",
+      "notes": ["login → 401 /callback"],
+      "plan": "oidcc-client-basic-certification-test-plan"
+    },
+    {
+      "module": "oidcc-client-test-kid-absent-single-jwks",
+      "id": "27SoAYkhr6JC7as",
+      "status": "FINISHED",
+      "result": "PASSED",
+      "notes": ["login → 200 /"],
+      "plan": "oidcc-client-basic-certification-test-plan"
+    },
+    {
+      "module": "oidcc-client-test-kid-absent-multiple-jwks",
+      "id": "Z8LyLOhlMPFsDTj",
+      "status": "FINISHED",
+      "result": "PASSED",
+      "notes": ["login → 200 /"],
+      "plan": "oidcc-client-basic-certification-test-plan"
+    },
+    {
+      "module": "oidcc-client-test-idtoken-sig-rs256",
+      "id": "owZFnwttXEy4DDk",
+      "status": "FINISHED",
+      "result": "PASSED",
+      "notes": ["login → 200 /"],
+      "plan": "oidcc-client-basic-certification-test-plan"
+    },
+    {
+      "module": "oidcc-client-test-idtoken-sig-none",
+      "id": "uMOh6ij2mQeqTpa",
+      "status": "FINISHED",
+      "result": "SKIPPED",
+      "notes": ["login → 401 /callback"],
+      "plan": "oidcc-client-basic-certification-test-plan"
+    },
+    {
+      "module": "oidcc-client-test-invalid-sig-rs256",
+      "id": "SVyJP2PxEFBrJq1",
+      "status": "FINISHED",
+      "result": "PASSED",
+      "notes": ["login → 401 /callback"],
+      "plan": "oidcc-client-basic-certification-test-plan"
+    },
+    {
+      "module": "oidcc-client-test-userinfo-invalid-sub",
+      "id": "T5sTxWTqcjcHVHl",
+      "status": "FINISHED",
+      "result": "PASSED",
+      "notes": ["login → 400 /callback"],
+      "plan": "oidcc-client-basic-certification-test-plan"
+    },
+    {
+      "module": "oidcc-client-test-nonce-invalid",
+      "id": "A4kRF7J0I8eaodc",
+      "status": "FINISHED",
+      "result": "PASSED",
+      "notes": ["login → 401 /callback"],
+      "plan": "oidcc-client-basic-certification-test-plan"
+    },
+    {
+      "module": "oidcc-client-test-scope-userinfo-claims",
+      "id": "sHnvpnp1GPtSLLm",
+      "status": "FINISHED",
+      "result": "PASSED",
+      "notes": ["login → 200 /"],
+      "plan": "oidcc-client-basic-certification-test-plan"
+    },
+    {
+      "module": "oidcc-client-test-client-secret-basic",
+      "id": "eoMFZThA15Dn4Oy",
+      "status": "FINISHED",
+      "result": "PASSED",
+      "notes": ["login → 200 /"],
+      "plan": "oidcc-client-basic-certification-test-plan"
+    },
+    {
+      "module": "oidcc-client-test",
+      "id": "8aW5PXr3KHGSZyF",
+      "status": "FINISHED",
+      "result": "PASSED",
+      "notes": ["login → 200 /"],
+      "plan": "oidcc-client-formpost-basic-certification-test-plan"
+    },
+    {
+      "module": "oidcc-client-test-invalid-iss",
+      "id": "OLoQq0KweTXghnL",
+      "status": "FINISHED",
+      "result": "PASSED",
+      "notes": ["login → 401 /callback"],
+      "plan": "oidcc-client-formpost-basic-certification-test-plan"
+    },
+    {
+      "module": "oidcc-client-test-missing-sub",
+      "id": "IHwyhAAQXdF77yr",
+      "status": "FINISHED",
+      "result": "PASSED",
+      "notes": ["login → 401 /callback"],
+      "plan": "oidcc-client-formpost-basic-certification-test-plan"
+    },
+    {
+      "module": "oidcc-client-test-invalid-aud",
+      "id": "evfZuz8IX2oAEXz",
+      "status": "FINISHED",
+      "result": "PASSED",
+      "notes": ["login → 401 /callback"],
+      "plan": "oidcc-client-formpost-basic-certification-test-plan"
+    },
+    {
+      "module": "oidcc-client-test-missing-iat",
+      "id": "uOwf43dPMKJtwMo",
+      "status": "FINISHED",
+      "result": "PASSED",
+      "notes": ["login → 401 /callback"],
+      "plan": "oidcc-client-formpost-basic-certification-test-plan"
+    },
+    {
+      "module": "oidcc-client-test-kid-absent-single-jwks",
+      "id": "L4rT9bgM6FgB4Yt",
+      "status": "FINISHED",
+      "result": "PASSED",
+      "notes": ["login → 200 /"],
+      "plan": "oidcc-client-formpost-basic-certification-test-plan"
+    },
+    {
+      "module": "oidcc-client-test-kid-absent-multiple-jwks",
+      "id": "i65mUD1YkhWN6lf",
+      "status": "FINISHED",
+      "result": "PASSED",
+      "notes": ["login → 200 /"],
+      "plan": "oidcc-client-formpost-basic-certification-test-plan"
+    },
+    {
+      "module": "oidcc-client-test-idtoken-sig-rs256",
+      "id": "k7cDJGTc44O60iV",
+      "status": "FINISHED",
+      "result": "PASSED",
+      "notes": ["login → 200 /"],
+      "plan": "oidcc-client-formpost-basic-certification-test-plan"
+    },
+    {
+      "module": "oidcc-client-test-idtoken-sig-none",
+      "id": "BlYeCsNFV8mDMWz",
+      "status": "FINISHED",
+      "result": "SKIPPED",
+      "notes": ["login → 401 /callback"],
+      "plan": "oidcc-client-formpost-basic-certification-test-plan"
+    },
+    {
+      "module": "oidcc-client-test-invalid-sig-rs256",
+      "id": "2YDebY8CcmYxiT9",
+      "status": "FINISHED",
+      "result": "PASSED",
+      "notes": ["login → 401 /callback"],
+      "plan": "oidcc-client-formpost-basic-certification-test-plan"
+    },
+    {
+      "module": "oidcc-client-test-userinfo-invalid-sub",
+      "id": "z2fo6xlMpYoQ8aH",
+      "status": "FINISHED",
+      "result": "PASSED",
+      "notes": ["login → 400 /callback"],
+      "plan": "oidcc-client-formpost-basic-certification-test-plan"
+    },
+    {
+      "module": "oidcc-client-test-nonce-invalid",
+      "id": "DSiVpKPMcTfkDgO",
+      "status": "FINISHED",
+      "result": "PASSED",
+      "notes": ["login → 401 /callback"],
+      "plan": "oidcc-client-formpost-basic-certification-test-plan"
+    },
+    {
+      "module": "oidcc-client-test-scope-userinfo-claims",
+      "id": "h4pmlEZvYVRLs46",
+      "status": "FINISHED",
+      "result": "PASSED",
+      "notes": ["login → 200 /"],
+      "plan": "oidcc-client-formpost-basic-certification-test-plan"
+    },
+    {
+      "module": "oidcc-client-test-client-secret-basic",
+      "id": "X8tYSFYAJKWMCjd",
+      "status": "FINISHED",
+      "result": "PASSED",
+      "notes": ["login → 200 /"],
+      "plan": "oidcc-client-formpost-basic-certification-test-plan"
+    },
+    {
+      "module": "oidcc-client-test-discovery-openid-config",
+      "id": "pxrOusAxUEiFWHN",
+      "status": "FINISHED",
+      "result": "PASSED",
+      "notes": ["module finished during RP startup"],
+      "plan": "oidcc-client-config-certification-test-plan"
+    },
+    {
+      "module": "oidcc-client-test-discovery-jwks-uri-keys",
+      "id": "5xnqU0agngsSgEh",
+      "status": "FINISHED",
+      "result": "PASSED",
+      "notes": ["module finished during RP startup"],
+      "plan": "oidcc-client-config-certification-test-plan"
+    },
+    {
+      "module": "oidcc-client-test-discovery-issuer-mismatch",
+      "id": "tgJfd92fcC6XrXZ",
+      "status": "FINISHED",
+      "result": "PASSED",
+      "notes": [
+        "reference RP refused to start: DiscoveryFailed(IssuerMismatch)"
+      ],
+      "plan": "oidcc-client-config-certification-test-plan"
+    },
+    {
+      "module": "oidcc-client-test-idtoken-sig-none",
+      "id": "LWBuXARrUX8rDID",
+      "status": "FINISHED",
+      "result": "SKIPPED",
+      "notes": ["login → 401 /callback"],
+      "plan": "oidcc-client-config-certification-test-plan"
+    },
+    {
+      "module": "oidcc-client-test-signing-key-rotation-just-before-signing",
+      "id": "GROe8tudVVje3MU",
+      "status": "FINISHED",
+      "result": "PASSED",
+      "notes": ["login → 200 /"],
+      "plan": "oidcc-client-config-certification-test-plan"
+    },
+    {
+      "module": "oidcc-client-test-signing-key-rotation",
+      "id": "GTGarvswyWWfCqr",
+      "status": "FINISHED",
+      "result": "PASSED",
+      "notes": ["login → 200 /", "second login → 200 /"],
+      "plan": "oidcc-client-config-certification-test-plan"
+    },
+    {
+      "module": "oidcc-client-test-3rd-party-init-login",
+      "id": "3gsnivTwUcdSJxH",
+      "status": "INTERRUPTED",
+      "result": "FAILED",
+      "notes": [
+        "reference RP refused to start: DiscoveryFailed(ProviderStatus(400, OtherOAuthError))"
+      ],
+      "plan": "oidcc-client-test-3rd-party-init-login-test-plan"
+    },
+    {
+      "module": "oidcc-client-test-refresh-token",
+      "id": "ajIGkAa8ZVPMRb6",
+      "status": "FINISHED",
+      "result": "PASSED",
+      "notes": ["login → 200 /", "refresh → completed"],
+      "plan": "oidcc-client-refreshtoken-test-plan"
+    },
+    {
+      "module": "oidcc-client-test-refresh-token-invalid-issuer",
+      "id": "NGiBDbazqVYPotg",
+      "status": "FINISHED",
+      "result": "PASSED",
+      "notes": ["login → 200 /", "refresh → quarantined"],
+      "plan": "oidcc-client-refreshtoken-test-plan"
+    },
+    {
+      "module": "oidcc-client-test-refresh-token-invalid-sub",
+      "id": "6eEl1THiBy9nNKk",
+      "status": "FINISHED",
+      "result": "PASSED",
+      "notes": ["login → 200 /", "refresh → quarantined"],
+      "plan": "oidcc-client-refreshtoken-test-plan"
+    },
+    {
+      "module": "oidcc-client-test-rp-init-logout",
+      "id": "k21RUg6QlRhylqY",
+      "status": "FINISHED",
+      "result": "REVIEW",
+      "notes": [
+        "login → 200 /",
+        "logout → 303 https://localhost.emobix.co.uk:8443/test/a/warden/end_session_endpoint",
+        "end session → redirected to /logged-out?state=present"
+      ],
+      "plan": "oidcc-client-rp-initiated-logout-rp-basic"
+    },
+    {
+      "module": "oidcc-client-test-rp-init-logout-other-state",
+      "id": "yCVANCK2oySCEM6",
+      "status": "FINISHED",
+      "result": "REVIEW",
+      "notes": [
+        "login → 200 /",
+        "logout → 303 https://localhost.emobix.co.uk:8443/test/a/warden/end_session_endpoint",
+        "end session → redirected to /logged-out?state=present"
+      ],
+      "plan": "oidcc-client-rp-initiated-logout-rp-basic"
+    },
+    {
+      "module": "oidcc-client-test-rp-init-logout-no-state",
+      "id": "COCgjm2fWccPSa6",
+      "status": "FINISHED",
+      "result": "REVIEW",
+      "notes": [
+        "login → 200 /",
+        "logout → 303 https://localhost.emobix.co.uk:8443/test/a/warden/end_session_endpoint",
+        "end session → redirected to /logged-out?state=absent"
+      ],
+      "plan": "oidcc-client-rp-initiated-logout-rp-basic"
+    }
+  ]
+}

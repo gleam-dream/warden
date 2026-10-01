@@ -24,7 +24,6 @@
 -include_lib("jose/include/jose_jwk.hrl").
 
 -export([
-    adapter/5,
     client/6,
     client/7,
     load_metadata/2,
@@ -76,33 +75,6 @@ ensure_started() ->
 
 %% ---------------------------------------------------------------------------
 %% Construction (trusted startup)
-
-%% Transport adapter configuration for `warden_http`.
-adapter(Trust, Destinations, AllowedHosts, TimeoutMs, MaxBody) ->
-    Cacerts =
-        case Trust of
-            system_anchors -> system;
-            {certificate_anchors, Ders} -> Ders
-        end,
-    {AllowLoopback, AllowPrivate} =
-        case Destinations of
-            public_internet_only -> {false, false};
-            allow_loopback_for_testing -> {true, false};
-            allow_private_network -> {false, true}
-        end,
-    Hosts =
-        case AllowedHosts of
-            none -> any;
-            {some, List} -> List
-        end,
-    {warden_http, #{
-        cacerts => Cacerts,
-        allow_loopback => AllowLoopback,
-        allow_private => AllowPrivate,
-        allowed_hosts => Hosts,
-        timeout => TimeoutMs,
-        max_body => MaxBody
-    }}.
 
 %% Client description used by every operation. `Credential` is
 %% `{some, SecretOrJwkJson}` or `none`.
@@ -546,7 +518,7 @@ int_or_null(V) when is_integer(V) -> V;
 int_or_null(_) -> null.
 
 json_claims(Claims) when is_map(Claims) ->
-    case warden_ffi:is_json_term(Claims) of
+    case is_json_term(Claims) of
         true -> {ok, Claims};
         false -> error
     end;
@@ -669,3 +641,13 @@ oauth_error(#{<<"error">> := Error}) when is_binary(Error) ->
     end;
 oauth_error(_) ->
     none.
+
+%% True when `Term` is a JSON value as produced by `json:decode/1`.
+is_json_term(Term) when is_binary(Term); is_number(Term) -> true;
+is_json_term(true) -> true;
+is_json_term(false) -> true;
+is_json_term(null) -> true;
+is_json_term(List) when is_list(List) -> lists:all(fun is_json_term/1, List);
+is_json_term(Map) when is_map(Map) ->
+    maps:fold(fun(K, V, Acc) -> Acc andalso is_binary(K) andalso is_json_term(V) end, true, Map);
+is_json_term(_) -> false.

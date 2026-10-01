@@ -15,6 +15,7 @@ mist = "== 6.0.3"
 envoy = ">= 1.0.0 and < 2.0.0"
 simplifile = ">= 2.0.0 and < 3.0.0"
 warden = { path = ".." }
+sinal = { path = "../../sinal" }
 
 [dev-dependencies]
 gleeunit = ">= 1.0.0 and < 2.0.0"

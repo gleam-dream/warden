@@ -1,7 +1,7 @@
 %% Test support exposed to Gleam tests.
 -module(warden_test_support_ffi).
 
--export([worker_kill/1, worker_alive/1, atom_count/0, process_count/0, form_login/3, print/1, node_reset/0, node_next/2, node_log/0, keycloak_logout/1, clock_new/1, clock_set/2, clock_read/1, provider_start/1, kill_named/1, ca_pem/0, keycloak_login/3, authorize/2, visit/1, count_reset/0, count/1, handle/4, pki_file/1, spawn_collect/2]).
+-export([backend_env/0, adapter_request/2, server_start/2, server_url/2, server_requests/1, server_stop/1, ca_der/0, worker_kill/1, worker_alive/1, atom_count/0, process_count/0, form_login/3, print/1, node_reset/0, node_next/2, node_log/0, keycloak_logout/1, clock_new/1, clock_set/2, clock_read/1, provider_start/1, kill_named/1, ca_pem/0, keycloak_login/3, authorize/2, visit/1, count_reset/0, count/1, handle/4, pki_file/1, spawn_collect/2]).
 
 ca_pem() ->
     Dir = warden_test_server:pki_dir(),
@@ -161,3 +161,44 @@ worker_kill(Name) ->
 worker_alive(Name) -> whereis(Name) =/= undefined.
 atom_count() -> erlang:system_info(atom_count).
 process_count() -> erlang:system_info(process_count).
+
+%% Canned TLS servers for transport tests.
+server_start(Cert, Kind) ->
+    warden_test_server:start(binary_to_list(Cert), canned(Kind)).
+server_url(Server, Path) -> warden_test_server:url(Server, binary_to_list(Path)).
+server_requests(Server) -> length(warden_test_server:requests(Server)).
+server_stop(Server) -> warden_test_server:stop(Server), nil.
+ca_der() -> warden_test_pki:ca_der(warden_test_server:pki_dir()).
+
+json_ok() -> {respond, 200, [{<<"content-type">>, <<"application/json">>}], <<"{\"a\":1}">>}.
+
+canned(ok_json) -> fun(_) -> json_ok() end;
+canned(redirect) -> fun(_) -> {respond, 302, [{<<"location">>, <<"https://169.254.169.254/latest">>}], <<>>} end;
+canned(declared_oversize) -> fun(_) -> {raw_then_hold, <<"HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: 1000000000\r\n\r\n">>} end;
+canned(endless_chunked) -> fun(_) -> {stream_forever, binary:copy(<<"a">>, 1000)} end;
+canned(close_delimited_oversize) -> fun(_) -> {raw, [<<"HTTP/1.1 200 OK\r\ncontent-type: application/json\r\n\r\n">>, binary:copy(<<"b">>, 10000)]} end;
+canned(chunked_ok) -> fun(_) -> {raw, <<"HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ntransfer-encoding: chunked\r\n\r\n3\r\n{\"a\r\n4;x=y\r\n\":1}\r\n0\r\nx-trailer: t\r\n\r\n">>} end;
+canned(interim) -> fun(_) -> {raw, <<"HTTP/1.1 100 Continue\r\n\r\nHTTP/1.1 200 OK\r\ncontent-length: 2\r\n\r\nok">>} end;
+canned(slow) -> fun(_) -> {delay, 3000, json_ok()} end;
+canned(many_headers) -> fun(_) -> {raw, [<<"HTTP/1.1 200 OK\r\n">>, [[<<"x-h">>, integer_to_list(N), <<": v\r\n">>] || N <- lists:seq(1, 200)], <<"content-length: 0\r\n\r\n">>]} end;
+canned(big_header_line) -> fun(_) -> {raw, [<<"HTTP/1.1 200 OK\r\nx-big: ">>, binary:copy(<<"z">>, 40000), <<"\r\ncontent-length: 0\r\n\r\n">>]} end;
+canned(gzip) -> fun(_) -> {respond, 200, [{<<"content-encoding">>, <<"gzip">>}], <<"xx">>} end;
+canned(error_body) -> fun(_) -> {respond, 400, [{<<"content-type">>, <<"application/json">>}], <<"{\"error\":\"invalid_grant\",\"error_description\":\"SECRET-TEXT\"}">>} end;
+canned(html_error) -> fun(_) -> {respond, 500, [{<<"content-type">>, <<"text/html">>}], <<"<html>SECRET</html>">>} end;
+canned(bad_json) -> fun(_) -> {respond, 200, [{<<"content-type">>, <<"application/json">>}], <<"{\"access_token\":\"SECRET\"">>} end;
+canned(truncated) -> fun(_) -> {raw, <<"HTTP/1.1 200 OK\r\ncontent-length: 100\r\n\r\nshort">>} end;
+canned(bad_status) -> fun(_) -> {raw, <<"NOT HTTP\r\n\r\n">>} end.
+
+%% Call an oidcc adapter term the way oidcc does; summarise the result.
+adapter_request({Module, Config}, Url) ->
+    case Module:request(get, {binary_to_list(Url), [{"accept", "application/json"}]}, [{timeout, 5000}], [{body_format, binary}], Config) of
+        {ok, {{_, Status, _}, _Headers, Body}} -> {Status, Body};
+        {error, {warden_transport, Stage, Class}} -> iolist_to_binary([atom_to_list(Stage), ":", atom_to_list(Class)])
+    end.
+
+%% Backend under test: WARDEN_BACKEND=native (default) | oidcc.
+backend_env() ->
+    case os:getenv("WARDEN_BACKEND") of
+        "oidcc" -> <<"oidcc">>;
+        _ -> <<"native">>
+    end.

@@ -135,9 +135,16 @@ pub fn uncertain_and_invalid_refresh_outcomes_quarantine_test() {
     #(support.Delay(1500), "provider"),
     #(support.Status(503, "temporarily_unavailable"), "provider"),
     #(support.Close, "provider"),
-    #(support.MalformedJson, "provider"),
-    #(support.OmitIdToken, "SubjectMismatchOrIdTokenAbsent"),
-    #(support.IdToken("changed_sub"), "SubjectMismatchOrIdTokenAbsent"),
+    // The native backend parses the body itself (precise category); the
+    // oidcc adapter refuses invalid JSON at the transport (uncertain).
+    #(support.MalformedJson, case support.backend_name() {
+      "oidcc" -> "provider"
+      _ -> "RefreshResponseMalformed"
+    }),
+    #(support.IdToken("changed_sub"), case support.backend_name() {
+      "oidcc" -> "SubjectMismatchOrIdTokenAbsent"
+      _ -> "RefreshedSubjectMismatch"
+    }),
     #(support.IdToken("changed_nonce"), "RefreshedNonceMismatch"),
     #(
       support.IdToken("changed_auth_time"),
@@ -368,6 +375,40 @@ pub fn custody_loss_during_refresh_never_calls_the_provider_test() {
   let assert Error(warden.RefreshSessionMissing) =
     warden.refresh_session(client, session)
   assert support.token_requests(provider) == requests
+  warden.stop(client)
+  support.provider_stop(provider)
+}
+
+/// OIDC Core §12.2 permits a refresh response without an ID token. The
+/// native backend keeps the established identity (decision D10); the pinned
+/// oidcc backend cannot accept the response and quarantines (D6).
+pub fn refresh_without_id_token_test() {
+  let provider = support.provider_start(support.Standard)
+  let client = start(settings(provider))
+  let session = logged_in(provider, client)
+  support.script(
+    provider,
+    support.Refresh(refresh_token_of(provider)),
+    support.OmitIdToken,
+  )
+  case support.backend_name(), warden.refresh_session(client, session) {
+    "oidcc", result -> {
+      let assert Ok(warden.RefreshResponseQuarantined(
+        warden.SubjectMismatchOrIdTokenAbsent,
+        _,
+      )) = result
+      Nil
+    }
+    _, result -> {
+      let assert Ok(warden.RefreshCompleted(refreshed)) = result
+      assert warden.identity_key(warden.session_identity(refreshed))
+        == warden.identity_key(warden.session_identity(session))
+      assert warden.session_revision(refreshed) == 2
+      let assert Ok(warden.RefreshCompleted(_)) =
+        warden.refresh_session(client, refreshed)
+      Nil
+    }
+  }
   warden.stop(client)
   support.provider_stop(provider)
 }

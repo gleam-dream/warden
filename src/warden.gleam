@@ -41,6 +41,11 @@ import warden/internal/backend
 import warden/internal/call
 import warden/internal/callback
 import warden/internal/custody_store as custody
+import warden/internal/native/client as native
+import warden/internal/native/provider
+import warden/internal/oidcc_backend as oidcc
+import warden/internal/protocol
+import warden/internal/secure
 import warden/internal/transaction_store as transactions
 
 // ===========================================================================
@@ -58,6 +63,7 @@ pub opaque type Client {
     supervisor: Pid,
     clock: fn() -> Int,
     assume_s256: Bool,
+    provider_name: Dynamic,
   )
 }
 
@@ -147,7 +153,7 @@ pub type OAuthError {
 /// the validated configuration, and start the supervised processes. The
 /// supervisor is linked to the caller.
 pub fn start(config: Config) -> Result(Client, StartError) {
-  start_with_clock(config, now_seconds)
+  start_with_clock(config, secure.now_seconds)
 }
 
 /// A child specification for an application supervision tree.
@@ -188,7 +194,7 @@ pub fn start_with_clock(
 pub fn start_assuming_s256_for_conformance(
   config: Config,
 ) -> Result(Client, StartError) {
-  start_internal(config, now_seconds, True)
+  start_internal(config, secure.now_seconds, True)
 }
 
 fn start_internal(
@@ -196,27 +202,119 @@ fn start_internal(
   clock: fn() -> Int,
   assume_s256: Bool,
 ) -> Result(Client, StartError) {
-  use _ <- result.try(case backend.ensure_started() {
+  let started = case config.backend(config) {
+    config.NativeBackend -> secure.ensure_applications()
+    config.OidccBackend -> oidcc.ensure_started()
+  }
+  use _ <- result.try(case started {
     True -> Ok(Nil)
     False -> Error(ProcessStartFailed)
   })
-  let adapter = backend.adapter(config)
+  case config.backend(config) {
+    config.NativeBackend -> start_native(config, clock, assume_s256)
+    config.OidccBackend -> start_oidcc(config, clock, assume_s256)
+  }
+}
+
+fn start_native(
+  config: Config,
+  clock: fn() -> Int,
+  assume_s256: Bool,
+) -> Result(Client, StartError) {
+  let issuer = config.issuer(config)
+  let policy = config.transport_policy(config)
+  // One discovery and JWKS load; the provider cache starts from it.
+  use discovered <- result.try(
+    provider.discover(issuer, policy)
+    |> result.map_error(fn(f) { DiscoveryFailed(provider_failure(f)) }),
+  )
+  use _ <- result.try(
+    case compatibility(config, discovered.metadata, assume_s256) {
+      [] -> Ok(Nil)
+      problems -> Error(ProviderIncompatible(problems))
+    },
+  )
+  let provider_name = process.new_name("warden_provider")
+  let timeout = config.store_timeout_ms(config)
+  let provider_handle =
+    provider.Provider(process.named_subject(provider_name), timeout)
+  start_supervised(
+    config,
+    clock,
+    assume_s256,
+    supervision.worker(fn() {
+      provider.start(provider_name, issuer, policy, Some(discovered))
+      |> result.map(fn(started) { actor.Started(..started, data: Nil) })
+    }),
+    backend.Native(native.new(config, provider_handle, policy, clock)),
+    to_dynamic(provider_name),
+  )
+}
+
+fn start_oidcc(
+  config: Config,
+  clock: fn() -> Int,
+  assume_s256: Bool,
+) -> Result(Client, StartError) {
+  let adapter = oidcc.adapter(config)
   let worker_name = process.new_name("warden_provider")
+  let worker = oidcc.worker_name(worker_name)
+  let issuer = config.issuer(config)
+  use client <- result.try(start_supervised(
+    config,
+    clock,
+    assume_s256,
+    supervision.worker(fn() {
+      oidcc.start_worker(worker, issuer, adapter)
+      |> result.map(fn(pid) { actor.Started(pid:, data: Nil) })
+      |> result.replace_error(actor.InitFailed("provider worker"))
+    }),
+    backend.Oidcc(oidcc.new(config, worker, adapter, assume_s256)),
+    to_dynamic(worker_name),
+  ))
+  // One discovery on the success path: the oidcc worker's own load. A
+  // second, diagnostic load runs only when the worker is not ready after a
+  // short delay, to report a typed failure.
+  let checked = case
+    wait_ready(worker, issuer, adapter, config.startup_timeout_ms(config), 0)
+  {
+    Error(error) -> Error(error)
+    Ok(Nil) ->
+      case backend.metadata(client.backend) {
+        Error(failure) -> Error(DiscoveryFailed(provider_failure(failure)))
+        Ok(metadata) if metadata.issuer != issuer ->
+          Error(DiscoveryFailed(IssuerMismatch))
+        Ok(metadata) ->
+          case compatibility(config, metadata, assume_s256) {
+            [] -> Ok(client)
+            problems -> Error(ProviderIncompatible(problems))
+          }
+      }
+  }
+  case checked {
+    Ok(client) -> Ok(client)
+    Error(error) -> {
+      stop(client)
+      Error(error)
+    }
+  }
+}
+
+fn start_supervised(
+  config: Config,
+  clock: fn() -> Int,
+  assume_s256: Bool,
+  provider_child: supervision.ChildSpecification(Nil),
+  backend: backend.Backend,
+  provider_name: Dynamic,
+) -> Result(Client, StartError) {
   let transaction_name = process.new_name("warden_transactions")
   let custody_name = process.new_name("warden_custody")
-  let worker = backend.worker_name(worker_name)
-  let issuer = config.issuer(config)
   let lifetime = config.login_lifetime_seconds(config)
   let started =
     supervisor.new(supervisor.OneForOne)
     |> supervisor.restart_tolerance(intensity: 10, period: 60)
-    |> supervisor.add(
-      supervision.worker(fn() {
-        backend.start_worker(worker, issuer, adapter)
-        |> result.map(fn(pid) { actor.Started(pid:, data: Nil) })
-        |> result.replace_error(actor.InitFailed("provider worker"))
-      }),
-    )
+    |> supervisor.add(provider_child)
     |> supervisor.add(
       supervision.worker(fn() {
         transactions.start(
@@ -230,7 +328,7 @@ fn start_internal(
     |> supervisor.add(
       supervision.worker(fn() {
         custody.start(
-          new_reference: fn() { random_token(32) },
+          new_reference: fn() { secure.random_token(32) },
           history_limit: 100_000,
           name: custody_name,
         )
@@ -241,70 +339,41 @@ fn start_internal(
     Error(_) -> Error(ProcessStartFailed)
     Ok(actor.Started(pid: supervisor_pid, ..)) -> {
       let timeout = config.store_timeout_ms(config)
-      let client =
-        Client(
-          config:,
-          backend: backend.new(config, worker, adapter, assume_s256),
-          transactions: transactions.Store(
-            process.named_subject(transaction_name),
-            timeout,
-          ),
-          custody: custody.Store(process.named_subject(custody_name), timeout),
-          provider: provider_binding(config),
-          supervisor: supervisor_pid,
-          clock:,
-          assume_s256:,
-        )
-      // One discovery on the success path: the oidcc worker's own load. A
-      // second, diagnostic load runs only when the worker is not ready after
-      // a short delay, to report a typed failure.
-      let checked = case
-        wait_ready(
-          worker,
-          issuer,
-          adapter,
-          config.startup_timeout_ms(config),
-          0,
-        )
-      {
-        Error(error) -> Error(error)
-        Ok(Nil) ->
-          case backend.metadata(client.backend) {
-            Error(failure) -> Error(DiscoveryFailed(provider_failure(failure)))
-            Ok(metadata) if metadata.issuer != issuer ->
-              Error(DiscoveryFailed(IssuerMismatch))
-            Ok(metadata) ->
-              case compatibility(config, metadata, assume_s256) {
-                [] -> Ok(client)
-                problems -> Error(ProviderIncompatible(problems))
-              }
-          }
-      }
-      case checked {
-        Ok(client) -> Ok(client)
-        Error(error) -> {
-          stop(client)
-          Error(error)
-        }
-      }
+      Ok(Client(
+        config:,
+        backend:,
+        transactions: transactions.Store(
+          process.named_subject(transaction_name),
+          timeout,
+        ),
+        custody: custody.Store(process.named_subject(custody_name), timeout),
+        provider: provider_binding(config),
+        supervisor: supervisor_pid,
+        clock:,
+        assume_s256:,
+        provider_name:,
+      ))
     }
   }
 }
 
+@external(erlang, "gleam_stdlib", "identity")
+fn to_dynamic(value: a) -> Dynamic
+
 const diagnose_after_ms = 1500
 
 fn wait_ready(
-  worker: backend.WorkerName,
+  worker: oidcc.WorkerName,
   issuer: String,
-  adapter: backend.Adapter,
+  adapter: oidcc.Adapter,
   remaining: Int,
   elapsed: Int,
 ) -> Result(Nil, StartError) {
-  case backend.ready(worker) {
+  case oidcc.ready(worker) {
     True -> Ok(Nil)
     False if remaining <= 0 -> Error(StartupTimedOut)
     False if elapsed == diagnose_after_ms ->
-      case backend.load_metadata(issuer, adapter) {
+      case oidcc.load_metadata(issuer, adapter) {
         Error(failure) -> Error(DiscoveryFailed(provider_failure(failure)))
         Ok(metadata) if metadata.issuer != issuer ->
           Error(DiscoveryFailed(IssuerMismatch))
@@ -326,7 +395,7 @@ fn provider_binding(config: Config) -> String {
 
 fn compatibility(
   config: Config,
-  metadata: backend.Metadata,
+  metadata: protocol.Metadata,
   assume_s256: Bool,
 ) -> List(Incompatibility) {
   let method = config.authentication_method(config)
@@ -535,11 +604,11 @@ pub fn begin_login(
   )
   let binding = case browser {
     Some(binding) -> binding
-    None -> BrowserBinding(random_token(32))
+    None -> BrowserBinding(secure.random_token(32))
   }
-  let state = random_token(32)
-  let nonce = random_token(32)
-  let verifier = random_token(32)
+  let state = secure.random_token(32)
+  let nonce = secure.random_token(32)
+  let verifier = secure.random_token(32)
   let redirect_uri = config.redirect_uri(client.config)
   let scopes =
     list.append(config.scopes(client.config), options.scopes) |> list.unique
@@ -547,7 +616,7 @@ pub fn begin_login(
   use url <- result.try(
     backend.authorization_url(
       client.backend,
-      backend.AuthorizationParams(
+      protocol.AuthorizationParams(
         redirect_uri:,
         state:,
         nonce:,
@@ -564,7 +633,7 @@ pub fn begin_login(
     metadata.authorization_endpoint,
     state:,
     nonce:,
-    challenge: s256(verifier),
+    challenge: secure.s256(verifier),
     redirect_uri:,
     client_id: config.client_id(client.config),
   ))
@@ -575,7 +644,7 @@ pub fn begin_login(
       nonce:,
       verifier:,
       redirect_uri:,
-      browser_hash: sha256_hex(binding.value),
+      browser_hash: secure.sha256_hex(binding.value),
       max_age: options.max_age,
       created_at: now,
       expires_at: now + config.login_lifetime_seconds(client.config),
@@ -701,7 +770,7 @@ fn check_authorization_url(
 }
 
 fn transaction_key(state: String) -> String {
-  sha256_hex(state)
+  secure.sha256_hex(state)
 }
 
 // ===========================================================================
@@ -908,7 +977,7 @@ fn check_binding(
     callback.CodeResponse(state:, issuer:, ..)
     | callback.ErrorResponse(state:, issuer:, ..) -> #(state, issuer)
   }
-  use _ <- result.try(case constant_time_equal(state, material.state) {
+  use _ <- result.try(case secure.constant_time_equal(state, material.state) {
     True -> Ok(Nil)
     False -> Error(CallbackRejected(UnknownState))
   })
@@ -917,7 +986,12 @@ fn check_binding(
     None -> Error(CallbackRejected(BrowserBindingMissing))
   })
   use _ <- result.try(
-    case constant_time_equal(sha256_hex(binding.value), material.browser_hash) {
+    case
+      secure.constant_time_equal(
+        secure.sha256_hex(binding.value),
+        material.browser_hash,
+      )
+    {
       True -> Ok(Nil)
       False -> Error(CallbackRejected(BrowserBindingMismatch))
     },
@@ -985,23 +1059,24 @@ fn exchange(
   install(client, identity, material, response)
 }
 
-fn exchange_failure(failure: backend.Failure) -> LoginError {
+fn exchange_failure(failure: protocol.Failure) -> LoginError {
   case failure {
-    backend.NotReady | backend.Policy(_) ->
+    protocol.NotReady | protocol.Policy(_) ->
       ProviderUnavailableBeforeExchange(provider_failure(failure))
-    backend.Transport(sent: False, ..) ->
+    protocol.Transport(sent: False, ..) ->
       ProviderUnavailableBeforeExchange(provider_failure(failure))
-    backend.Transport(sent: True, ..) -> ExchangeOutcomeUnknown
-    backend.Endpoint(status:, error:) if status == 400 || status == 401 ->
+    protocol.Transport(sent: True, ..) -> ExchangeOutcomeUnknown
+    protocol.Endpoint(status:, error:) if status == 400 || status == 401 ->
       case oauth_error(error) {
         NoOAuthError -> ExchangeOutcomeUnknown
         known -> ExchangeRejected(known)
       }
-    backend.Endpoint(..) -> ExchangeOutcomeUnknown
-    backend.Malformed -> ExchangeOutcomeUnknown
-    backend.IdTokenInvalid(reason:, claim:) ->
+    protocol.Endpoint(..) -> ExchangeOutcomeUnknown
+    protocol.Malformed -> ExchangeOutcomeUnknown
+    protocol.IdTokenInvalid(reason:, claim:) ->
       IdentityRejected(identity_problem(reason, claim))
-    backend.UserinfoSubjectMismatch | backend.Unmapped -> ExchangeOutcomeUnknown
+    protocol.UserinfoSubjectMismatch | protocol.Unmapped ->
+      ExchangeOutcomeUnknown
   }
 }
 
@@ -1034,7 +1109,7 @@ fn identity_problem(reason: String, claim: Option(String)) -> IdentityProblem {
 fn accept_identity(
   client: Client,
   material: transactions.Material,
-  response: backend.TokenResponse,
+  response: protocol.TokenResponse,
 ) -> Result(VerifiedIdentity, IdentityProblem) {
   use id_token <- result.try(
     case response.id_token, response.id_token_malformed {
@@ -1046,26 +1121,26 @@ fn accept_identity(
   let claims = id_token.claims
   let issuer = config.issuer(client.config)
   let client_id = config.client_id(client.config)
-  use _ <- result.try(case backend.string_claim(claims, "iss") {
+  use _ <- result.try(case protocol.string_claim(claims, "iss") {
     Some(value) if value == issuer -> Ok(Nil)
     _ -> Error(IdTokenIssuerMismatch)
   })
-  use _ <- result.try(case backend.audiences(claims) {
+  use _ <- result.try(case protocol.audiences(claims) {
     [audience] if audience == client_id -> Ok(Nil)
     _ -> Error(IdTokenAudienceMismatch)
   })
-  use _ <- result.try(case backend.string_claim(claims, "azp") {
+  use _ <- result.try(case protocol.string_claim(claims, "azp") {
     None -> Ok(Nil)
     Some(value) if value == client_id -> Ok(Nil)
     Some(_) -> Error(AuthorizedPartyMismatch)
   })
-  use subject <- result.try(case backend.string_claim(claims, "sub") {
+  use subject <- result.try(case protocol.string_claim(claims, "sub") {
     Some(subject) if subject != "" -> Ok(subject)
     _ -> Error(MissingClaim("sub"))
   })
-  use _ <- result.try(case backend.string_claim(claims, "nonce") {
+  use _ <- result.try(case protocol.string_claim(claims, "nonce") {
     Some(nonce) ->
-      case constant_time_equal(nonce, material.nonce) {
+      case secure.constant_time_equal(nonce, material.nonce) {
         True -> Ok(Nil)
         False -> Error(NonceMismatch)
       }
@@ -1074,7 +1149,7 @@ fn accept_identity(
   use _ <- result.try(case material.max_age {
     None -> Ok(Nil)
     Some(max_age) ->
-      case backend.int_claim(claims, "auth_time") {
+      case protocol.int_claim(claims, "auth_time") {
         Some(auth_time) if auth_time + max_age >= 0 ->
           case client.clock() - auth_time <= max_age {
             True -> Ok(Nil)
@@ -1117,7 +1192,7 @@ pub fn subject(identity: VerifiedIdentity) -> String {
 }
 
 pub fn email(identity: VerifiedIdentity) -> Option(String) {
-  backend.string_claim(identity.claims, "email")
+  protocol.string_claim(identity.claims, "email")
 }
 
 pub fn email_verified(identity: VerifiedIdentity) -> Option(Bool) {
@@ -1126,20 +1201,20 @@ pub fn email_verified(identity: VerifiedIdentity) -> Option(Bool) {
 }
 
 pub fn name(identity: VerifiedIdentity) -> Option(String) {
-  backend.string_claim(identity.claims, "name")
+  protocol.string_claim(identity.claims, "name")
 }
 
 pub fn preferred_username(identity: VerifiedIdentity) -> Option(String) {
-  backend.string_claim(identity.claims, "preferred_username")
+  protocol.string_claim(identity.claims, "preferred_username")
 }
 
 /// `auth_time` in Unix seconds, when the provider included it.
 pub fn authentication_time(identity: VerifiedIdentity) -> Option(Int) {
-  backend.int_claim(identity.claims, "auth_time")
+  protocol.int_claim(identity.claims, "auth_time")
 }
 
 pub fn acr(identity: VerifiedIdentity) -> Option(String) {
-  backend.string_claim(identity.claims, "acr")
+  protocol.string_claim(identity.claims, "acr")
 }
 
 pub fn amr(identity: VerifiedIdentity) -> List(String) {
@@ -1208,7 +1283,7 @@ fn install(
   client: Client,
   identity: VerifiedIdentity,
   material: transactions.Material,
-  response: backend.TokenResponse,
+  response: protocol.TokenResponse,
 ) -> Result(LoginCompletion, LoginError) {
   let tokens =
     custody.Tokens(
@@ -1221,7 +1296,7 @@ fn install(
     )
   let command =
     custody.Install(
-      command_id: random_token(24),
+      command_id: secure.random_token(24),
       provider: client.provider,
       identity:,
       evidence: custody.Evidence(
@@ -1403,8 +1478,10 @@ pub type RefreshResult {
 pub type RefreshValidationError {
   /// The pinned oidcc refresh path reports both a changed subject and an
   /// absent ID token as the same error; Warden cannot tell them apart. An
-  /// absent refresh ID token is not supported by the default adapter.
+  /// absent refresh ID token is not supported by the oidcc backend.
   SubjectMismatchOrIdTokenAbsent
+  /// The refreshed ID token names a different subject.
+  RefreshedSubjectMismatch
   RefreshedIssuerMismatch
   RefreshedAudienceMismatch
   RefreshedAuthorizedPartyMismatch
@@ -1471,7 +1548,7 @@ pub fn refresh_session(
     True -> Ok(Nil)
     False -> Error(RefreshSessionForeign)
   })
-  let command_id = random_token(24)
+  let command_id = secure.random_token(24)
   let recovery =
     RefreshReservationRecovery(
       provider: client.provider,
@@ -1528,14 +1605,14 @@ fn dispatch_refresh(
   case outcome {
     Error(failure) ->
       case failure {
-        backend.NotReady
-        | backend.Policy(_)
-        | backend.Transport(sent: False, ..) ->
+        protocol.NotReady
+        | protocol.Policy(_)
+        | protocol.Transport(sent: False, ..) ->
           settle(
             custody.SettleNotSent,
             RefreshDidNotSend(provider_failure(failure)),
           )
-        backend.Endpoint(status:, error:) if status == 400 || status == 401 ->
+        protocol.Endpoint(status:, error:) if status == 400 || status == 401 ->
           case oauth_error(error) {
             InvalidGrant ->
               settle(
@@ -1550,12 +1627,12 @@ fn dispatch_refresh(
             other ->
               settle(custody.SettleNotSent, RefreshRejectedByEndpoint(other))
           }
-        backend.IdTokenInvalid(reason: "subject_mismatch", ..) ->
+        protocol.IdTokenInvalid(reason: "subject_mismatch", ..) ->
           settle(
             custody.SettleQuarantine,
             RefreshResponseQuarantined(SubjectMismatchOrIdTokenAbsent, recovery),
           )
-        backend.IdTokenInvalid(reason:, claim:) ->
+        protocol.IdTokenInvalid(reason:, claim:) ->
           settle(
             custody.SettleQuarantine,
             RefreshResponseQuarantined(
@@ -1563,15 +1640,15 @@ fn dispatch_refresh(
               recovery,
             ),
           )
-        backend.Malformed ->
+        protocol.Malformed ->
           settle(
             custody.SettleQuarantine,
             RefreshResponseQuarantined(RefreshResponseMalformed, recovery),
           )
-        backend.Transport(sent: True, ..)
-        | backend.Endpoint(..)
-        | backend.UserinfoSubjectMismatch
-        | backend.Unmapped ->
+        protocol.Transport(sent: True, ..)
+        | protocol.Endpoint(..)
+        | protocol.UserinfoSubjectMismatch
+        | protocol.Unmapped ->
           settle(custody.SettleQuarantine, RefreshProviderQuarantined(recovery))
       }
     Ok(response) ->
@@ -1608,7 +1685,7 @@ fn dispatch_refresh(
 fn refreshed_update(
   client: Client,
   dispatch: custody.Dispatch(VerifiedIdentity),
-  response: backend.TokenResponse,
+  response: protocol.TokenResponse,
 ) -> Result(custody.Update, RefreshValidationError) {
   use access <- result.try(case response.access_token {
     Some(token) -> Ok(token)
@@ -1623,36 +1700,36 @@ fn refreshed_update(
       let claims = id_token.claims
       let original = dispatch.identity
       let client_id = config.client_id(client.config)
-      use _ <- result.try(case backend.string_claim(claims, "iss") {
+      use _ <- result.try(case protocol.string_claim(claims, "iss") {
         Some(value) if value == original.issuer -> Ok(Nil)
         _ -> Error(RefreshedIssuerMismatch)
       })
-      use _ <- result.try(case backend.string_claim(claims, "sub") {
+      use _ <- result.try(case protocol.string_claim(claims, "sub") {
         Some(value) if value == original.subject -> Ok(Nil)
-        _ -> Error(SubjectMismatchOrIdTokenAbsent)
+        _ -> Error(RefreshedSubjectMismatch)
       })
       use _ <- result.try(
-        case backend.audiences(claims) == [config.client_id(client.config)] {
+        case protocol.audiences(claims) == [config.client_id(client.config)] {
           True -> Ok(Nil)
           False -> Error(RefreshedAudienceMismatch)
         },
       )
-      use _ <- result.try(case backend.string_claim(claims, "azp") {
+      use _ <- result.try(case protocol.string_claim(claims, "azp") {
         None -> Ok(Nil)
         Some(value) if value == client_id -> Ok(Nil)
         Some(_) -> Error(RefreshedAuthorizedPartyMismatch)
       })
-      use _ <- result.try(case backend.string_claim(claims, "nonce") {
+      use _ <- result.try(case protocol.string_claim(claims, "nonce") {
         None -> Ok(Nil)
         Some(nonce) ->
-          case constant_time_equal(nonce, dispatch.evidence.nonce) {
+          case secure.constant_time_equal(nonce, dispatch.evidence.nonce) {
             True -> Ok(Nil)
             False -> Error(RefreshedNonceMismatch)
           }
       })
       use _ <- result.try(
         case
-          backend.int_claim(claims, "auth_time"),
+          protocol.int_claim(claims, "auth_time"),
           dispatch.evidence.auth_time
         {
           Some(new), Some(old) if new != old ->
@@ -1662,7 +1739,10 @@ fn refreshed_update(
       )
       Ok(custody.ReplaceWith(id_token.token))
     }
-    None -> Error(SubjectMismatchOrIdTokenAbsent)
+    // OIDC Core §12.2: a refresh response may omit the ID token; the
+    // established identity and logout hint are retained. (The oidcc backend
+    // cannot deliver such a response; see SubjectMismatchOrIdTokenAbsent.)
+    None -> Ok(custody.Retain)
   })
   use scopes <- result.try(case response.scopes {
     [] -> Ok(custody.Retain)
@@ -1775,11 +1855,11 @@ pub fn userinfo(
     )
   {
     Ok(claims) ->
-      case backend.string_claim(claims, "sub") {
+      case protocol.string_claim(claims, "sub") {
         Some(value) if value == subject -> Ok(UserInfo(subject:, claims:))
         _ -> Error(UserinfoSubjectMismatch)
       }
-    Error(backend.UserinfoSubjectMismatch) -> Error(UserinfoSubjectMismatch)
+    Error(protocol.UserinfoSubjectMismatch) -> Error(UserinfoSubjectMismatch)
     Error(failure) -> Error(UserinfoFailed(provider_failure(failure)))
   }
 }
@@ -1825,7 +1905,7 @@ pub fn client_credentials(
     }),
   )
   case backend.client_credentials(client.backend, scopes) {
-    Ok(backend.TokenResponse(access_token: Some(token), ..) as response) ->
+    Ok(protocol.TokenResponse(access_token: Some(token), ..) as response) ->
       Ok(ClientToken(
         access_token: access_token(token, response.token_type),
         expires_in: response.expires_in,
@@ -1834,11 +1914,11 @@ pub fn client_credentials(
     Ok(_) -> Error(ClientCredentialsOutcomeUnknown)
     Error(failure) ->
       Error(case failure {
-        backend.NotReady
-        | backend.Policy(_)
-        | backend.Transport(sent: False, ..) ->
+        protocol.NotReady
+        | protocol.Policy(_)
+        | protocol.Transport(sent: False, ..) ->
           ClientCredentialsNotSent(provider_failure(failure))
-        backend.Endpoint(status:, error:) if status == 400 || status == 401 ->
+        protocol.Endpoint(status:, error:) if status == 400 || status == 401 ->
           case oauth_error(error) {
             NoOAuthError -> ClientCredentialsOutcomeUnknown
             known -> ClientCredentialsRejected(known)
@@ -1882,8 +1962,8 @@ pub fn introspect(
   token: String,
 ) -> Result(Introspection, IntrospectionError) {
   case backend.introspect(client.backend, token) {
-    Ok(backend.Inactive) -> Ok(InactiveToken)
-    Ok(backend.Active(..) as a) ->
+    Ok(protocol.Inactive) -> Ok(InactiveToken)
+    Ok(protocol.Active(..) as a) ->
       Ok(
         ActiveToken(TokenInfo(
           client_id: a.client_id,
@@ -1897,7 +1977,7 @@ pub fn introspect(
           claims: a.extra,
         )),
       )
-    Error(backend.Policy("endpoint_missing")) ->
+    Error(protocol.Policy("endpoint_missing")) ->
       Error(IntrospectionNotSupported)
     Error(failure) -> Error(IntrospectionFailed(provider_failure(failure)))
   }
@@ -1984,19 +2064,19 @@ pub fn logout(
 // ===========================================================================
 // Shared helpers
 
-fn provider_failure(failure: backend.Failure) -> ProviderFailure {
+fn provider_failure(failure: protocol.Failure) -> ProviderFailure {
   case failure {
-    backend.NotReady -> ProviderNotReady
-    backend.Transport(sent:, class:) ->
+    protocol.NotReady -> ProviderNotReady
+    protocol.Transport(sent:, class:) ->
       TransportFailure(sent:, reason: transport_reason(class))
-    backend.Endpoint(status:, error:) ->
+    protocol.Endpoint(status:, error:) ->
       ProviderStatus(status:, error: oauth_error(error))
-    backend.Malformed -> MalformedProviderResponse
-    backend.Policy("issuer_mismatch") -> IssuerMismatch
-    backend.Policy(_)
-    | backend.IdTokenInvalid(..)
-    | backend.UserinfoSubjectMismatch
-    | backend.Unmapped -> UnclassifiedBackendFailure
+    protocol.Malformed -> MalformedProviderResponse
+    protocol.Policy("issuer_mismatch") -> IssuerMismatch
+    protocol.Policy(_)
+    | protocol.IdTokenInvalid(..)
+    | protocol.UserinfoSubjectMismatch
+    | protocol.Unmapped -> UnclassifiedBackendFailure
   }
 }
 
@@ -2034,21 +2114,6 @@ fn oauth_error(code: String) -> OAuthError {
   }
 }
 
-@external(erlang, "warden_ffi", "random_token")
-fn random_token(bytes: Int) -> String
-
-@external(erlang, "warden_ffi", "s256")
-fn s256(verifier: String) -> String
-
-@external(erlang, "warden_ffi", "sha256_hex")
-fn sha256_hex(value: String) -> String
-
-@external(erlang, "warden_ffi", "constant_time_equal")
-fn constant_time_equal(a: String, b: String) -> Bool
-
-@external(erlang, "warden_ffi", "now_seconds")
-fn now_seconds() -> Int
-
 // ===========================================================================
 // Test support (internal)
 
@@ -2062,9 +2127,10 @@ pub fn custody_owner(client: Client) -> custody.Store(VerifiedIdentity) {
   client.custody
 }
 
+/// Registered name of the provider process (oidcc worker or native cache).
 @internal
-pub fn provider_worker(client: Client) -> backend.WorkerName {
-  client.backend.worker
+pub fn provider_worker(client: Client) -> Dynamic {
+  client.provider_name
 }
 
 @internal

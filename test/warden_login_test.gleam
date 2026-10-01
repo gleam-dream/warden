@@ -27,6 +27,7 @@ pub fn settings(provider: support.Provider) -> config.Settings {
   |> config.with_trust(config.TrustAnchorsPem(support.ca_pem()))
   |> config.with_destinations(config.AllowLoopbackForTesting)
   |> config.with_signing_algorithms([config.Rs256])
+  |> support.with_test_backend
 }
 
 pub fn start(settings: config.Settings) -> warden.Client {
@@ -148,7 +149,8 @@ pub fn racing_callbacks_consume_once_test() {
 /// its critical section, so the login expires and no token request is sent.
 pub fn clock_is_sampled_inside_the_critical_section_test() {
   let provider = support.provider_start(support.Standard)
-  let clock = support.clock_new(1000)
+  let base = support.now_seconds()
+  let clock = support.clock_new(base)
   let assert Ok(validated) =
     config.validate(settings(provider) |> config.with_login_lifetime(60))
   let assert Ok(client) =
@@ -156,7 +158,7 @@ pub fn clock_is_sampled_inside_the_critical_section_test() {
   let assert Ok(redirect) =
     warden.begin_login(client, None, warden.default_login())
   let query = authorize(provider, redirect, "held-code")
-  support.clock_set(clock, 1059)
+  support.clock_set(clock, base + 59)
   let assert Ok(release) =
     transaction_store.hold(warden.transaction_store(client))
   let result_subject = process.new_subject()
@@ -171,7 +173,7 @@ pub fn clock_is_sampled_inside_the_critical_section_test() {
     )
   })
   process.sleep(100)
-  support.clock_set(clock, 1060)
+  support.clock_set(clock, base + 60)
   process.send(release, Nil)
   let assert Ok(result) = process.receive(result_subject, 5000)
   assert result == Error(warden.LoginExpired)
@@ -182,7 +184,8 @@ pub fn clock_is_sampled_inside_the_critical_section_test() {
 
 pub fn one_second_before_expiry_completes_test() {
   let provider = support.provider_start(support.Standard)
-  let clock = support.clock_new(1000)
+  let base = support.now_seconds()
+  let clock = support.clock_new(base)
   let assert Ok(validated) =
     config.validate(settings(provider) |> config.with_login_lifetime(60))
   let assert Ok(client) =
@@ -190,7 +193,7 @@ pub fn one_second_before_expiry_completes_test() {
   let assert Ok(redirect) =
     warden.begin_login(client, None, warden.default_login())
   let query = authorize(provider, redirect, "edge-code")
-  support.clock_set(clock, 1059)
+  support.clock_set(clock, base + 59)
   let assert Ok(warden.LoginCompleted(_)) =
     warden.complete_login(
       client,

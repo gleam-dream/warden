@@ -8,17 +8,21 @@ import gleam/string
 import warden
 import warden/config
 import warden/internal/callback
+import warden/internal/secure
 
 // --- RFC 7636 Appendix B -----------------------------------------------------
 
-@external(erlang, "warden_ffi", "s256")
-fn s256(verifier: String) -> String
+fn s256(verifier: String) -> String {
+  secure.s256(verifier)
+}
 
-@external(erlang, "warden_ffi", "random_token")
-fn random_token(bytes: Int) -> String
+fn random_token(bytes: Int) -> String {
+  secure.random_token(bytes)
+}
 
-@external(erlang, "warden_ffi", "constant_time_equal")
-fn constant_time_equal(a: String, b: String) -> Bool
+fn constant_time_equal(a: String, b: String) -> Bool {
+  secure.constant_time_equal(a, b)
+}
 
 pub fn rfc7636_appendix_b_vector_test() {
   assert s256("dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk")

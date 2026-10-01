@@ -55,9 +55,14 @@ every call:
   `test/providers/node-oidc/package-lock.json`.
 - OpenID conformance suite `release-v5.3.1` prebuilt images (MIT).
 
-## D6 — Absent refresh ID token (open, owner decision)
+## D6 — Absent refresh ID token (resolved by the native backend, D10)
 
-See [P3](probes/P3-refresh.md). The default adapter reports
+See [P3](probes/P3-refresh.md). The native backend accepts a refresh
+response without an ID token (OIDC Core §12.2): the rotated tokens are
+installed and the session identity is retained. A present ID token must keep
+`iss`, `sub` and `aud`; a changed subject is quarantined as
+`RefreshedSubjectMismatch`. The oidcc alternate still cannot (its refresh
+path returns `sub_invalid`) and reports
 `RefreshResponseQuarantined(SubjectMismatchOrIdTokenAbsent, _)`.
 
 ## D7 — PKCE S256 advertisement required (open, owner decision)
@@ -96,3 +101,83 @@ See [P3](probes/P3-refresh.md). The default adapter reports
   discovery itself first; a diagnostic fetch runs only if the worker is not
   ready after 1.5 s, to return a typed failure. Found by the suite's
   discovery-only modules, which finish on the first request.
+
+## D10 — Gleam-native backend on gose (approved 2026-09-30, in progress)
+
+- Owner decision (session of 2026-09-30): build a Gleam-native backend on
+  gose 2.2.0 (Apache-2.0, commit `961324d3`) and kryptos 1.5.0 behind the
+  existing backend seam, following design §5: same contract tests, corpus,
+  raw-oidcc differential, interoperability and conformance runs before the
+  default switches; oidcc stays as the alternate backend for at least one
+  release. This **revises the accepted design** (§1, §3.1, §3.4: oidcc as
+  default; "no second OIDC core"): Warden will own discovery and JWKS
+  caching, token, refresh, userinfo, introspection and logout requests and
+  the ID-token claim rules. Cryptography stays in gose/kryptos (Erlang
+  `crypto`/`public_key`). The design document in `gleam-dream/oversight`
+  needs the corresponding update.
+- Evidence (scratch probe, panva/jose-generated tokens): gose accepted RS256,
+  ES256, EdDSA and kid-less RS256; rejected `alg: none` at parse, HS256
+  confusion via Warden's allowlist, PS256 against an RS256-tagged key,
+  unknown or wrong keys, expired tokens, wrong issuer and audience; skipped
+  unusable JWKs (RFC 7517 §5) including the conformance suite's set. Its
+  audience check is "contains", so Warden keeps its exact-audience rule.
+- Expected consequences: D6 (refresh without ID token) and D8 (unusable keys)
+  are resolved by construction; error categories become precise; the
+  oidcc-specific narrowing (D3) is unnecessary for the native backend.
+- Risks: larger Warden-owned security surface; gose/kryptos are young,
+  single-maintainer packages (CI on OTP 27–29, RFC 7515 vectors, Wycheproof
+  in kryptos). Both need pinning and review like oidcc.
+
+## D11 — Transport in Gleam over OTP ssl (approved 2026-09-30)
+
+- gleam_httpc 5.0.0 offers only TLS on/off, redirects and a timeout: no
+  custom trust anchors, no body bound before allocation, no destination
+  policy, and its FFI raises on unexpected httpc errors. gleam_hackney is
+  similar; mug 3.1.0 has no TLS; http_gun lacks pre-connection DNS/IP
+  control. The transport is rewritten in Gleam, binding OTP `ssl`, `inet`
+  and `public_key` with `@external` and no handwritten Erlang module.
+- Later: adopt http_gun once it gains a destination-policy hook
+  ([prompt](handoff/http-gun-destination-policy.md)).
+
+### D10 parity evidence (2026-09-30)
+
+- The native backend passes the same suites as oidcc: fast, Keycloak,
+  node-oidc-provider (21-token corpus, 5 client-auth methods, 22-scenario
+  raw-oidcc differential), Dex/Hydra and the 9-scenario browser journey.
+  The differential agrees on accept/reject except the two documented
+  stricter policies; rejection categories are now precise
+  (`UnsignedIdToken`, `AlgorithmNotAllowed`, `BadSignature`).
+- X.509 members in JWKs: gose 2.2.0 rejects a JWK carrying `x5c`, `x5t`,
+  `x5t#S256` or `x5u` (Keycloak publishes `x5c` on every key). Warden drops
+  those members before parsing and verifies with the bare key material, as
+  oidcc does: Warden never trusted the certificate chain, so no check is
+  lost. To report upstream: gose should ignore (or optionally validate) X.509
+  members instead of rejecting the key.
+- Key refresh on an unknown `kid` is throttled per provider: a new `kid`
+  refreshes immediately (bounded to 64 remembered kids), a repeated one at
+  most once per second.
+
+## D12 — Observations through sinal (owner direction, 2026-09-30)
+
+- Warden's observations are typed `sinal` event descriptors in the public
+  module `warden/observation`, emitted with `sinal.emit` over `:telemetry`.
+  Applications subscribe with `sinal.observe`/`sinal.attach`/
+  `sinal.with_subscriptions` and receive Gleam values, not raw maps.
+- `[warden, http, request]`: measurement `duration_ms`; metadata `method`,
+  `host`, `path` and `outcome` (`Status(code)` or `Failed(sent, class)` with
+  the transport's closed class). Queries, headers and bodies are never
+  observed (redaction test covers it).
+- sinal is a path dependency on the sibling repository. It pinned
+  `gleam_stdlib < 1.0.0`; branch `gleam-stdlib-1` (commit `77fcbef`, local in
+  `gleam-dream/sinal`) widens it to `< 2.0.0` with its 93 tests passing on
+  1.0.5. That branch needs merging and a release before Warden can depend on
+  a published version.
+- The oidcc alternate keeps emitting oidcc's own untyped telemetry events.
+- Finding for sinal: `sinal.observe`/`attach` raise (`noproc` from
+  `telemetry_handler_table`) when the `telemetry` application is not yet
+  running, instead of returning an `AttachError`. The reference RP starts
+  `telemetry` itself before attaching (an application duty until sinal
+  handles it). `sinal.emit` is unaffected: Warden starts `telemetry` with its
+  other applications before any request.
+- The native backend starts only `crypto`, `public_key`, `ssl` and
+  `telemetry`; it no longer starts the oidcc application.

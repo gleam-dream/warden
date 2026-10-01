@@ -286,7 +286,15 @@ await browser.close();
 fs.mkdirSync(path.join(ROOT, "build"), { recursive: true });
 fs.writeFileSync(
   path.join(ROOT, "build/browser-journey.json"),
-  JSON.stringify({ chrome: "installed Google Chrome", results }, null, 2),
+  JSON.stringify(
+    {
+      chrome: "installed Google Chrome",
+      backend: process.env.WARDEN_BACKEND ?? "native",
+      results,
+    },
+    null,
+    2,
+  ),
 );
 for (const r of results)
   console.log(

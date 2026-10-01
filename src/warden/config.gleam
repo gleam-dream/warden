@@ -17,12 +17,21 @@
 //// let assert Ok(validated) = config.validate(settings)
 //// ```
 
+import exception
 import gleam/bit_array
+import gleam/dynamic.{type Dynamic}
+import gleam/dynamic/decode
+import gleam/erlang/atom
 import gleam/list
 import gleam/option.{type Option, None, Some}
 import gleam/result
 import gleam/string
 import gleam/uri
+import gose
+import gose/jose/jwk
+import kryptos/ec
+import kryptos/eddsa
+import warden/internal/transport
 
 // ---------------------------------------------------------------------------
 // Secret material
@@ -57,15 +66,43 @@ pub type SigningKeyError {
 pub fn signing_key_from_jwk(
   json: String,
 ) -> Result(SigningKey, SigningKeyError) {
-  case jwk_signing_key(json) {
-    Ok(#(key_id, algorithms)) ->
-      Ok(SigningKey(reveal: fn() { json }, key_id:, algorithms:))
-    Error(Nil) -> Error(NotAPrivateSigningJwk)
+  case jwk.from_json(json) {
+    Ok(key) ->
+      case gose.is_private_key(key) {
+        False -> Error(NotAPrivateSigningJwk)
+        True -> {
+          let algorithms = case gose.key_type(key) {
+            gose.RsaKeyType -> ["RS256", "PS256"]
+            gose.EcKeyType ->
+              case gose.ec_curve(key) {
+                Ok(ec.P256) -> ["ES256"]
+                Ok(ec.P384) -> ["ES384"]
+                Ok(ec.P521) -> ["ES512"]
+                _ -> []
+              }
+            gose.OkpKeyType ->
+              case gose.eddsa_curve(key) {
+                Ok(eddsa.Ed25519) -> ["EdDSA"]
+                _ -> []
+              }
+            gose.OctKeyType -> []
+          }
+          // A JWK `alg` member restricts the key to that algorithm.
+          let algorithms = case gose.alg(key) {
+            Ok(alg) ->
+              list.filter(algorithms, fn(a) { a == jwk.alg_to_string(alg) })
+            Error(Nil) -> algorithms
+          }
+          Ok(SigningKey(
+            reveal: fn() { json },
+            key_id: option.from_result(gose.kid(key)),
+            algorithms:,
+          ))
+        }
+      }
+    Error(_) -> Error(NotAPrivateSigningJwk)
   }
 }
-
-@external(erlang, "warden_ffi", "jwk_signing_key")
-fn jwk_signing_key(json: String) -> Result(#(Option(String), List(String)), Nil)
 
 // ---------------------------------------------------------------------------
 // Settings
@@ -153,6 +190,16 @@ pub type Transport {
   )
 }
 
+/// The protocol and JOSE backend (decision D10). The default is
+/// `NativeBackend`.
+pub type Backend {
+  /// Gleam-native backend on gose (JOSE) and Warden's transport. Default.
+  NativeBackend
+  /// oidcc 3.9.0 through Warden's Erlang boundary, kept as the alternate
+  /// backend for at least one release after the default switches.
+  OidccBackend
+}
+
 pub type Settings {
   Settings(
     issuer: String,
@@ -173,6 +220,7 @@ pub type Settings {
     startup_timeout_ms: Int,
     /// Timeout for calls to Warden's own stores.
     store_timeout_ms: Int,
+    backend: Backend,
   )
 }
 
@@ -209,7 +257,12 @@ pub fn new(
     max_pending_logins: 100_000,
     startup_timeout_ms: 15_000,
     store_timeout_ms: 5000,
+    backend: NativeBackend,
   )
+}
+
+pub fn with_backend(settings: Settings, backend: Backend) -> Settings {
+  Settings(..settings, backend:)
 }
 
 pub fn with_scopes(settings: Settings, scopes: List(String)) -> Settings {
@@ -296,6 +349,7 @@ pub opaque type Config {
     max_pending_logins: Int,
     startup_timeout_ms: Int,
     store_timeout_ms: Int,
+    backend: Backend,
   )
 }
 
@@ -388,6 +442,7 @@ pub fn validate(settings: Settings) -> Result(Config, List(ConfigError)) {
         max_pending_logins: settings.max_pending_logins,
         startup_timeout_ms: settings.startup_timeout_ms,
         store_timeout_ms: settings.store_timeout_ms,
+        backend: settings.backend,
       ))
     _, _ -> Error(errors)
   }
@@ -505,8 +560,32 @@ pub fn algorithm_name(algorithm: SigningAlgorithm) -> String {
   }
 }
 
-@external(erlang, "warden_ffi", "pem_certificates")
-fn pem_certificates(pem: String) -> Result(List(BitArray), Nil)
+/// DER certificates from PEM text; an error when none are present.
+fn pem_certificates(pem: String) -> Result(List(BitArray), Nil) {
+  let certificate = {
+    use kind <- decode.field(0, atom.decoder())
+    use der <- decode.field(1, decode.bit_array)
+    decode.success(case atom.to_string(kind) {
+      "Certificate" -> Ok(der)
+      _ -> Error(Nil)
+    })
+  }
+  case exception.rescue(fn() { pem_decode(<<pem:utf8>>) }) {
+    Ok(entries) ->
+      case decode.run(entries, decode.list(certificate)) {
+        Ok(decoded) ->
+          case result.values(decoded) {
+            [] -> Error(Nil)
+            ders -> Ok(ders)
+          }
+        Error(_) -> Error(Nil)
+      }
+    Error(_) -> Error(Nil)
+  }
+}
+
+@external(erlang, "public_key", "pem_decode")
+fn pem_decode(pem: BitArray) -> Dynamic
 
 // ---------------------------------------------------------------------------
 // Accessors for Warden's own modules. These expose validated configuration,
@@ -560,6 +639,11 @@ pub fn max_pending_logins(config: Config) -> Int {
 @internal
 pub fn startup_timeout_ms(config: Config) -> Int {
   config.startup_timeout_ms
+}
+
+@internal
+pub fn backend(config: Config) -> Backend {
+  config.backend
 }
 
 @internal
@@ -633,4 +717,25 @@ pub fn signing_key_id(config: Config) -> Option(String) {
     PrivateKeyJwt(key) -> key.key_id
     _ -> None
   }
+}
+
+/// The transport policy derived from validated configuration.
+@internal
+pub fn transport_policy(config: Config) -> transport.Policy {
+  let #(allow_loopback, allow_private) = case config.destinations {
+    PublicInternetOnly -> #(False, False)
+    AllowLoopbackForTesting -> #(True, False)
+    AllowPrivateNetwork -> #(False, True)
+  }
+  transport.Policy(
+    ..transport.policy(case config.trust {
+      SystemAnchors -> transport.SystemTrust
+      CertificateAnchors(certs) -> transport.Anchors(certs)
+    }),
+    allow_loopback:,
+    allow_private:,
+    allowed_hosts: config.allowed_hosts,
+    timeout_ms: config.request_timeout_ms,
+    max_body: config.max_response_bytes,
+  )
 }

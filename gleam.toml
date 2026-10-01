@@ -16,6 +16,12 @@ oidcc = "== 3.9.0"
 jose = "== 1.11.12"
 telemetry = "== 1.4.2"
 telemetry_registry = "== 0.3.2"
+exception = "== 2.1.1"
+gleam_crypto = "== 1.6.0"
+gleam_time = "== 1.11.0"
+gose = "== 2.2.0"
+kryptos = "== 1.5.0"
+sinal = { path = "../sinal" }
 
 [dev-dependencies]
 gleeunit = ">= 1.0.0 and < 2.0.0"

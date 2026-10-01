@@ -1,0 +1,41 @@
+PASSED   FINISHED    oidcc-client-basic-certification-test-plan oidcc-client-test  login → 200 /
+PASSED   FINISHED    oidcc-client-basic-certification-test-plan oidcc-client-test-invalid-iss  login → 401 /callback
+PASSED   FINISHED    oidcc-client-basic-certification-test-plan oidcc-client-test-missing-sub  login → 401 /callback
+PASSED   FINISHED    oidcc-client-basic-certification-test-plan oidcc-client-test-invalid-aud  login → 401 /callback
+PASSED   FINISHED    oidcc-client-basic-certification-test-plan oidcc-client-test-missing-iat  login → 401 /callback
+PASSED   FINISHED    oidcc-client-basic-certification-test-plan oidcc-client-test-kid-absent-single-jwks  login → 200 /
+PASSED   FINISHED    oidcc-client-basic-certification-test-plan oidcc-client-test-kid-absent-multiple-jwks  login → 200 /
+PASSED   FINISHED    oidcc-client-basic-certification-test-plan oidcc-client-test-idtoken-sig-rs256  login → 200 /
+SKIPPED  FINISHED    oidcc-client-basic-certification-test-plan oidcc-client-test-idtoken-sig-none  login → 401 /callback
+PASSED   FINISHED    oidcc-client-basic-certification-test-plan oidcc-client-test-invalid-sig-rs256  login → 401 /callback
+PASSED   FINISHED    oidcc-client-basic-certification-test-plan oidcc-client-test-userinfo-invalid-sub  login → 400 /callback
+PASSED   FINISHED    oidcc-client-basic-certification-test-plan oidcc-client-test-nonce-invalid  login → 401 /callback
+PASSED   FINISHED    oidcc-client-basic-certification-test-plan oidcc-client-test-scope-userinfo-claims  login → 200 /
+PASSED   FINISHED    oidcc-client-basic-certification-test-plan oidcc-client-test-client-secret-basic  login → 200 /
+PASSED   FINISHED    oidcc-client-formpost-basic-certification-test-plan oidcc-client-test  login → 200 /
+PASSED   FINISHED    oidcc-client-formpost-basic-certification-test-plan oidcc-client-test-invalid-iss  login → 401 /callback
+PASSED   FINISHED    oidcc-client-formpost-basic-certification-test-plan oidcc-client-test-missing-sub  login → 401 /callback
+PASSED   FINISHED    oidcc-client-formpost-basic-certification-test-plan oidcc-client-test-invalid-aud  login → 401 /callback
+PASSED   FINISHED    oidcc-client-formpost-basic-certification-test-plan oidcc-client-test-missing-iat  login → 401 /callback
+PASSED   FINISHED    oidcc-client-formpost-basic-certification-test-plan oidcc-client-test-kid-absent-single-jwks  login → 200 /
+PASSED   FINISHED    oidcc-client-formpost-basic-certification-test-plan oidcc-client-test-kid-absent-multiple-jwks  login → 200 /
+PASSED   FINISHED    oidcc-client-formpost-basic-certification-test-plan oidcc-client-test-idtoken-sig-rs256  login → 200 /
+SKIPPED  FINISHED    oidcc-client-formpost-basic-certification-test-plan oidcc-client-test-idtoken-sig-none  login → 401 /callback
+PASSED   FINISHED    oidcc-client-formpost-basic-certification-test-plan oidcc-client-test-invalid-sig-rs256  login → 401 /callback
+PASSED   FINISHED    oidcc-client-formpost-basic-certification-test-plan oidcc-client-test-userinfo-invalid-sub  login → 400 /callback
+PASSED   FINISHED    oidcc-client-formpost-basic-certification-test-plan oidcc-client-test-nonce-invalid  login → 401 /callback
+PASSED   FINISHED    oidcc-client-formpost-basic-certification-test-plan oidcc-client-test-scope-userinfo-claims  login → 200 /
+PASSED   FINISHED    oidcc-client-formpost-basic-certification-test-plan oidcc-client-test-client-secret-basic  login → 200 /
+PASSED   FINISHED    oidcc-client-config-certification-test-plan oidcc-client-test-discovery-openid-config  module finished during RP startup
+PASSED   FINISHED    oidcc-client-config-certification-test-plan oidcc-client-test-discovery-jwks-uri-keys  module finished during RP startup
+PASSED   FINISHED    oidcc-client-config-certification-test-plan oidcc-client-test-discovery-issuer-mismatch  reference RP refused to start: DiscoveryFailed(IssuerMismatch)
+SKIPPED  FINISHED    oidcc-client-config-certification-test-plan oidcc-client-test-idtoken-sig-none  login → 401 /callback
+PASSED   FINISHED    oidcc-client-config-certification-test-plan oidcc-client-test-signing-key-rotation-just-before-signing  login → 200 /
+PASSED   FINISHED    oidcc-client-config-certification-test-plan oidcc-client-test-signing-key-rotation  login → 200 / | second login → 200 /
+FAILED   INTERRUPTED oidcc-client-test-3rd-party-init-login-test-plan oidcc-client-test-3rd-party-init-login  reference RP refused to start: DiscoveryFailed(ProviderStatus(400, OtherOAuthError))
+PASSED   FINISHED    oidcc-client-refreshtoken-test-plan oidcc-client-test-refresh-token  login → 200 / | refresh → completed
+PASSED   FINISHED    oidcc-client-refreshtoken-test-plan oidcc-client-test-refresh-token-invalid-issuer  login → 200 / | refresh → quarantined
+PASSED   FINISHED    oidcc-client-refreshtoken-test-plan oidcc-client-test-refresh-token-invalid-sub  login → 200 / | refresh → quarantined
+REVIEW   FINISHED    oidcc-client-rp-initiated-logout-rp-basic oidcc-client-test-rp-init-logout  login → 200 / | logout → 303 https://localhost.emobix.co.uk:8443/test/a/warden/end_session_endpoint | end session → redirected to /logged-out?state=present
+REVIEW   FINISHED    oidcc-client-rp-initiated-logout-rp-basic oidcc-client-test-rp-init-logout-other-state  login → 200 / | logout → 303 https://localhost.emobix.co.uk:8443/test/a/warden/end_session_endpoint | end session → redirected to /logged-out?state=present
+REVIEW   FINISHED    oidcc-client-rp-initiated-logout-rp-basic oidcc-client-test-rp-init-logout-no-state  login → 200 / | logout → 303 https://localhost.emobix.co.uk:8443/test/a/warden/end_session_endpoint | end session → redirected to /logged-out?state=absent

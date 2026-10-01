@@ -24,6 +24,7 @@ fn settings() -> config.Settings {
   |> config.with_scopes(["profile", "email"])
   |> config.with_trust(config.TrustAnchorsPem(support.ca_pem()))
   |> config.with_destinations(config.AllowLoopbackForTesting)
+  |> support.with_test_backend
 }
 
 fn start(settings: config.Settings) -> warden.Client {

@@ -10,6 +10,7 @@ import gleam/uri
 import warden
 import warden/config
 import warden/internal/custody_store
+import warden/internal/secure
 import warden/internal/transaction_store
 import warden_login_test.{param, start}
 import warden_test_support as support
@@ -23,8 +24,9 @@ fn capture_stop() -> Nil
 @external(erlang, "warden_capture_ffi", "contains")
 fn captured(needle: String) -> Bool
 
-@external(erlang, "warden_ffi", "sha256_hex")
-fn sha256_hex(value: String) -> String
+fn sha256_hex(value: String) -> String {
+  secure.sha256_hex(value)
+}
 
 pub fn no_secret_reaches_errors_logs_or_telemetry_test() {
   capture_start()
@@ -48,7 +50,8 @@ pub fn no_secret_reaches_errors_logs_or_telemetry_test() {
       )
       |> config.with_trust(config.TrustAnchorsPem(support.ca_pem()))
       |> config.with_destinations(config.AllowLoopbackForTesting)
-      |> config.with_signing_algorithms([config.Rs256]),
+      |> config.with_signing_algorithms([config.Rs256])
+      |> support.with_test_backend,
     )
   let issuer = support.provider_issuer(provider)
 

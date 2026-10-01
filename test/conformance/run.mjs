@@ -19,6 +19,7 @@ const ISSUER = `${SUITE}/test/a/${ALIAS}/`;
 const APP_PORT = 18090;
 const APP = `https://localhost:${APP_PORT}`;
 const OUT = path.join(ROOT, "build/conformance");
+const BACKEND = process.env.WARDEN_BACKEND ?? "native";
 const PKI = path.join(ROOT, "build/test-pki");
 const SECRET = crypto.randomBytes(24).toString("base64url");
 fs.mkdirSync(OUT, { recursive: true });
@@ -416,10 +417,11 @@ for (const key of selected) {
 }
 if (chrome) await chrome.close();
 fs.writeFileSync(
-  path.join(OUT, `summary-${selected.join("_")}.json`),
+  path.join(OUT, `summary-${BACKEND}-${selected.join("_")}.json`),
   JSON.stringify(
     {
       suite: "release-v5.3.1",
+      backend: BACKEND,
       issuer: ISSUER,
       policy:
         (process.env.ASSUME_S256 ?? "1") === "1"

@@ -10,7 +10,7 @@
 -define(REDIRECT, <<"https://localhost:1/callback">>).
 
 adapter() ->
-    {warden_http, #{cacerts => [warden_test_pki:ca_der(warden_test_server:pki_dir())], allow_loopback => true}}.
+    warden_test_support:test_adapter(10000).
 
 rand() -> base64:encode(crypto:strong_rand_bytes(32), #{mode => urlsafe, padding => false}).
 

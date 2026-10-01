@@ -15,11 +15,7 @@
 -define(REDIRECT, <<"https://localhost:1/callback">>).
 
 adapter() ->
-    {warden_http, #{
-        cacerts => [warden_test_pki:ca_der(warden_test_server:pki_dir())],
-        allow_loopback => true,
-        timeout => 10000
-    }}.
+    warden_test_support:test_adapter(10000).
 
 request_opts() -> #{http_adapter => adapter()}.
 
@@ -183,7 +179,7 @@ probe() ->
     ?assertMatch({error, {http_error, 400, #{<<"error">> := <<"invalid_grant">>}}}, Revoked),
 
     %% Transport failure shape passes through oidcc unchanged.
-    Blocked = oidcc_token:refresh(Rt2, Narrow, #{expected_subject => Sub, preferred_auth_methods => [client_secret_basic], request_opts => #{http_adapter => {warden_http, #{allow_loopback => false}}}}),
+    Blocked = oidcc_token:refresh(Rt2, Narrow, #{expected_subject => Sub, preferred_auth_methods => [client_secret_basic], request_opts => #{http_adapter => warden_test_support:strict_adapter()}}),
     ?assertEqual({error, {warden_transport, not_sent, destination_rejected}}, Blocked),
 
     %% Refresh-token reuse detection revoked the session: its access token is

@@ -13,6 +13,11 @@
 - Driver: `test/conformance/run.mjs` (`scripts/conformance`). Module logs are
   written to `build/conformance/` (not committed; regenerate with the command).
 
+Both backends produced the same verdict for every module: the oidcc backend
+(`run-log.txt`, `summary-basic_…json`, `summary-refresh.json`) and the native
+gose backend (`WARDEN_BACKEND=native`, the default; `run-log-native.txt`,
+`summary-native-…json`, all plans in one consolidated pass).
+
 | Plan                                                | PASSED | SKIPPED | REVIEW | FAILED / not run |
 | --------------------------------------------------- | -----: | ------: | -----: | ---------------- |
 | oidcc-client-basic-certification-test-plan          |     13 |       1 |      0 | 0                |
@@ -37,6 +42,7 @@ Notes:
   the reference RP's `/initiate-login` route remains unverified by the suite.
 - `oidcc-client-test-refresh-token-invalid-issuer` did not run in the
   consolidated pass (the previous RP still held the port); it was rerun alone
-  and PASSED (`summary-refresh.json`). The driver now waits for RP exit.
+  and PASSED (`summary-refresh.json`). The driver now waits for RP exit; in
+  the native run it passed in the consolidated pass.
 - Local results are regression evidence only; certification requires a
   hosted submission for an exact Warden release.

@@ -23,6 +23,7 @@ fn client() -> warden.Client {
     |> config.with_scopes(["email", "offline_access"])
     |> config.with_trust(config.TrustAnchorsPem(support.ca_pem()))
     |> config.with_destinations(config.AllowLoopbackForTesting)
+    |> support.with_test_backend
     |> config.validate
   let assert Ok(client) = warden.start(validated)
   client
