@@ -1,7 +1,7 @@
 %% Test support exposed to Gleam tests.
 -module(warden_test_support_ffi).
 
--export([clock_new/1, clock_set/2, clock_read/1, provider_start/1, kill_named/1, ca_pem/0, keycloak_login/3, authorize/2, visit/1, count_reset/0, count/1, handle/4, pki_file/1, spawn_collect/2]).
+-export([print/1, node_reset/0, node_next/2, node_log/0, keycloak_logout/1, clock_new/1, clock_set/2, clock_read/1, provider_start/1, kill_named/1, ca_pem/0, keycloak_login/3, authorize/2, visit/1, count_reset/0, count/1, handle/4, pki_file/1, spawn_collect/2]).
 
 ca_pem() ->
     Dir = warden_test_server:pki_dir(),
@@ -99,3 +99,55 @@ kill_named(Name) ->
         undefined -> nil;
         Pid -> exit(Pid, kill), nil
     end.
+
+%% Follow an RP-initiated logout URL. Keycloak returns 302 to the
+%% post-logout URI when id_token_hint is valid.
+keycloak_logout(Url) ->
+    {ok, _} = application:ensure_all_started([inets, ssl]),
+    case warden_test_browser:get(warden_test_browser:new(), Url) of
+        {{Status, Headers, _}, _} when Status >= 300, Status < 400 ->
+            case uri_string:parse(proplists:get_value("location", Headers)) of
+                #{query := Q} -> {ok, {query, list_to_binary(Q)}};
+                _ -> {error, nil}
+            end;
+        _ ->
+            {error, nil}
+    end.
+
+%% node-oidc-provider control API.
+node_url(Path) -> "https://localhost:19443/__control/" ++ Path.
+
+node_ssl() ->
+    [{verify, verify_peer}, {cacerts, [warden_test_pki:ca_der(warden_test_server:pki_dir())]},
+     {customize_hostname_check, [{match_fun, public_key:pkix_verify_hostname_match_fun(https)}]}].
+
+node_post(Path, Map) ->
+    {ok, _} = application:ensure_all_started([inets, ssl]),
+    {ok, {{_, 204, _}, _, _}} = httpc:request(post, {node_url(Path), [], "application/json", iolist_to_binary(json:encode(Map))}, [{ssl, node_ssl()}], []),
+    nil.
+
+node_reset() -> node_post("reset", #{}).
+
+%% Actions from Gleam: [{Key, Value}] with binary keys.
+node_next(Grant, Actions) ->
+    node_post("next", maps:from_list([{<<"grant">>, Grant} | [action(A) || A <- Actions]])).
+
+action({node_id_token, M}) -> {<<"idToken">>, M};
+action(node_omit_id_token) -> {<<"omitIdToken">>, true};
+action(node_drop_refresh_token) -> {<<"dropRefreshToken">>, true};
+action({node_delay_ms, Ms}) -> {<<"delayMs">>, Ms};
+action({node_status, S}) -> {<<"status">>, S}.
+
+%% Token-endpoint log: list of {GrantType, ClientId, AssertionVerified | none}.
+node_log() ->
+    {ok, _} = application:ensure_all_started([inets, ssl]),
+    {ok, {{_, 200, _}, _, Body}} = httpc:request(get, {node_url("log"), []}, [{ssl, node_ssl()}], [{body_format, binary}]),
+    [ {maps:get(<<"grant_type">>, E, null), maps:get(<<"client_id">>, E, null),
+       case maps:get(<<"assertion">>, E, null) of
+           null -> <<"none">>;
+           #{<<"verified">> := true, <<"alg">> := Alg} -> <<"verified:", Alg/binary>>;
+           #{<<"verified">> := false} -> <<"rejected">>
+       end}
+      || E <- json:decode(Body)].
+
+print(Line) -> io:format(user, "~ts~n", [Line]), nil.

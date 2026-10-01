@@ -1,0 +1,41 @@
+#!/bin/sh
+# Negative compiler tests: each test_negative/*.gleam must FAIL to compile as
+# a separate consumer package using public imports, with an error mentioning
+# the text on its `// expect:` line.
+set -eu
+ROOT=$(cd "$(dirname "$0")/.." && pwd)
+WORK="$ROOT/build/negative"
+rm -rf "$WORK"; mkdir -p "$WORK/src"
+cat >"$WORK/gleam.toml" <<TOML
+name = "negative"
+version = "0.0.0"
+target = "erlang"
+[dependencies]
+gleam_stdlib = ">= 0.70.0 and < 1.0.0"
+warden = { path = "$ROOT" }
+TOML
+cp "$ROOT/manifest.toml" "$WORK/manifest.toml" 2>/dev/null || true
+failures=0
+for file in "$ROOT"/test_negative/*.gleam; do
+  name=$(basename "$file" .gleam)
+  expect=$(sed -n 's#^// expect: ##p' "$file" | head -1)
+  rm -f "$WORK"/src/*.gleam
+  cp "$file" "$WORK/src/negative.gleam"
+  if output=$(cd "$WORK" && gleam build 2>&1); then
+    echo "FAIL $name: compiled but must not"; failures=$((failures + 1))
+  elif printf '%s' "$output" | grep -q -- "$expect"; then
+    echo "ok   $name"
+  else
+    echo "FAIL $name: error does not mention '$expect'"; printf '%s\n' "$output" | tail -15
+    failures=$((failures + 1))
+  fi
+done
+# The positive control must compile, proving failures are not environmental.
+cat >"$WORK/src/negative.gleam" <<'GLEAM'
+import warden
+pub fn main(identity: warden.VerifiedIdentity) -> warden.IdentityKey {
+  warden.identity_key(identity)
+}
+GLEAM
+if (cd "$WORK" && gleam build >/dev/null 2>&1); then echo "ok   positive control"; else echo "FAIL positive control"; failures=$((failures + 1)); fi
+[ "$failures" -eq 0 ]

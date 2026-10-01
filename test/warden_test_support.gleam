@@ -107,3 +107,29 @@ pub fn script(provider: Provider, key: ScriptKey, behaviour: Behaviour) -> Nil
 
 @external(erlang, "warden_test_provider", "refresh_tokens")
 pub fn refresh_tokens(provider: Provider) -> List(String)
+
+@external(erlang, "warden_test_support_ffi", "keycloak_logout")
+pub fn keycloak_logout(url: String) -> Result(BrowserResult, Nil)
+
+pub type NodeAction {
+  NodeIdToken(String)
+  NodeOmitIdToken
+  NodeDropRefreshToken
+  NodeDelayMs(Int)
+  NodeStatus(Int)
+}
+
+@external(erlang, "warden_test_support_ffi", "node_reset")
+pub fn node_reset() -> Nil
+
+@external(erlang, "warden_test_support_ffi", "node_next")
+pub fn node_next(grant: String, actions: List(NodeAction)) -> Nil
+
+/// Token-endpoint requests seen by the node provider:
+/// `#(grant_type, client_id, assertion)` where assertion is `none`,
+/// `verified:<alg>` (checked by panva/jose) or `rejected`.
+@external(erlang, "warden_test_support_ffi", "node_log")
+pub fn node_log() -> List(#(String, String, String))
+
+@external(erlang, "warden_test_support_ffi", "print")
+pub fn print(line: String) -> Nil
