@@ -271,6 +271,11 @@ fn start_supervised(
         custody.start(
           new_reference: fn() { secure.random_token(32) },
           history_limit: 100_000,
+          clock: monotonic,
+          lifetime: {
+            let #(absolute, idle) = config.session_lifetime(config)
+            custody.Lifetime(absolute:, idle:)
+          },
           name: custody_name,
         )
       }),
@@ -1293,8 +1298,8 @@ pub fn recover_custody(
 }
 
 pub type SessionError {
-  /// The custody owner has no such session (unknown, logged out, or lost on
-  /// restart of the in-memory owner).
+  /// The custody owner has no such session (unknown, logged out, past its
+  /// absolute or idle lifetime, or lost on restart of the in-memory owner).
   SessionNotFound
   /// The session belongs to another client configuration.
   SessionForeign

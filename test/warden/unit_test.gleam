@@ -302,3 +302,25 @@ pub fn jwt_secret_length_limits_the_hmac_algorithms_test() {
   assert algorithms(48) == ["HS256", "HS384"]
   assert algorithms(64) == ["HS256", "HS384", "HS512"]
 }
+
+// --- Session lifetime (review finding F2) ------------------------------------
+
+pub fn session_lifetime_defaults_and_validation_test() {
+  let assert Ok(validated) = config.validate(base())
+  assert config.session_lifetime(validated) == #(43_200, 3600)
+  let assert Ok(custom) =
+    config.validate(config.with_session_lifetime(
+      base(),
+      absolute: 600,
+      idle: 60,
+    ))
+  assert config.session_lifetime(custom) == #(600, 60)
+  let assert Error([config.InvalidSessionLifetime]) =
+    config.validate(config.with_session_lifetime(
+      base(),
+      absolute: 60,
+      idle: 600,
+    ))
+  let assert Error([config.InvalidSessionLifetime]) =
+    config.validate(config.with_session_lifetime(base(), absolute: 600, idle: 0))
+}

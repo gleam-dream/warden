@@ -464,3 +464,25 @@ pub fn publication_recovery_survives_the_dispatcher_test() {
   warden.stop(client)
   support.provider_stop(provider)
 }
+
+/// An idle session ends in custody: it can no longer be restored, and its
+/// tokens are gone (review finding F2).
+pub fn idle_sessions_end_test() {
+  let provider = support.provider_start(support.Standard)
+  let clock = support.clock_new(support.now_seconds())
+  let assert Ok(validated) =
+    config.validate(
+      settings(provider)
+      |> config.with_session_lifetime(absolute: 600, idle: 60),
+    )
+  let assert Ok(client) =
+    warden.start_with_clock(validated, fn() { support.clock_read(clock) })
+  let session = logged_in(provider, client)
+  let reference = warden.session_reference(session)
+  let assert Ok(_) = warden.restore_session(client, reference)
+  support.clock_set(clock, support.clock_read(clock) + 61)
+  assert warden.restore_session(client, reference)
+    == Error(warden.SessionNotFound)
+  warden.stop(client)
+  support.provider_stop(provider)
+}

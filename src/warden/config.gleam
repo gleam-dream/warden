@@ -247,6 +247,9 @@ pub type Settings {
     startup_timeout_ms: Int,
     /// Timeout for calls to Warden's own stores.
     store_timeout_ms: Int,
+    /// Session lifetime in custody (see `with_session_lifetime`).
+    session_absolute_seconds: Int,
+    session_idle_seconds: Int,
   )
 }
 
@@ -284,6 +287,8 @@ pub fn new(
     max_pending_logins: 100_000,
     startup_timeout_ms: 15_000,
     store_timeout_ms: 5000,
+    session_absolute_seconds: 43_200,
+    session_idle_seconds: 3600,
   )
 }
 
@@ -363,6 +368,8 @@ pub type ConfigError {
   /// A `client_secret_jwt` secret is shorter than 32 bytes, the minimum HMAC
   /// key for HS256 (RFC 7518 §3.2).
   ClientSecretTooShort
+  /// Session lifetimes must be positive, with idle not above absolute.
+  InvalidSessionLifetime
 }
 
 /// A validated configuration.
@@ -386,6 +393,8 @@ pub opaque type Config {
     max_pending_logins: Int,
     startup_timeout_ms: Int,
     store_timeout_ms: Int,
+    session_absolute_seconds: Int,
+    session_idle_seconds: Int,
   )
 }
 
@@ -437,6 +446,12 @@ pub fn validate(settings: Settings) -> Result(Config, List(ConfigError)) {
         || settings.authentication != PublicClient,
       UnadvertisedPkceRequiresConfidentialClient,
     ),
+    check(
+      settings.session_idle_seconds > 0
+        && settings.session_idle_seconds <= settings.session_absolute_seconds
+        && settings.session_absolute_seconds <= 31_536_000,
+      InvalidSessionLifetime,
+    ),
     check(client_secret_present(settings.authentication), EmptyClientSecret),
     check(jwt_secret_long_enough(settings.authentication), ClientSecretTooShort),
   ]
@@ -486,6 +501,8 @@ pub fn validate(settings: Settings) -> Result(Config, List(ConfigError)) {
         max_pending_logins: settings.max_pending_logins,
         startup_timeout_ms: settings.startup_timeout_ms,
         store_timeout_ms: settings.store_timeout_ms,
+        session_absolute_seconds: settings.session_absolute_seconds,
+        session_idle_seconds: settings.session_idle_seconds,
       ))
     _, _ -> Error(errors)
   }
@@ -826,4 +843,25 @@ pub fn transport_policy(config: Config) -> transport.Policy {
     timeout_ms: config.request_timeout_ms,
     max_body: config.max_response_bytes,
   )
+}
+
+/// How long a session lasts in custody: `absolute` seconds after login at
+/// most, and `idle` seconds without use (restore, access token, userinfo,
+/// refresh). Expired sessions are evicted with their tokens. Defaults: 12
+/// hours absolute, 1 hour idle.
+pub fn with_session_lifetime(
+  settings: Settings,
+  absolute absolute: Int,
+  idle idle: Int,
+) -> Settings {
+  Settings(
+    ..settings,
+    session_absolute_seconds: absolute,
+    session_idle_seconds: idle,
+  )
+}
+
+/// `#(absolute_seconds, idle_seconds)`.
+pub fn session_lifetime(config: Config) -> #(Int, Int) {
+  #(config.session_absolute_seconds, config.session_idle_seconds)
 }

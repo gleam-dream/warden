@@ -7,13 +7,25 @@ import gleam/int
 import gleam/option.{None, Some}
 import warden/internal/custody_store as custody
 import warden/internal/secure
+import warden_test_support as support
 
 fn start(history_limit: Int) -> custody.Store(String) {
+  start_with(history_limit, fn() { 0 }, absolute: 1_000_000, idle: 1_000_000)
+}
+
+fn start_with(
+  history_limit: Int,
+  clock: fn() -> Int,
+  absolute absolute: Int,
+  idle idle: Int,
+) -> custody.Store(String) {
   let name = process.new_name("custody_store_test")
   let assert Ok(_) =
     custody.start(
       new_reference: fn() { secure.random_token(32) },
       history_limit:,
+      clock:,
+      lifetime: custody.Lifetime(absolute:, idle:),
       name:,
     )
   custody.Store(process.named_subject(name), 5000)
@@ -102,4 +114,61 @@ pub fn an_orphaned_reservation_accepts_only_its_publication_test() {
       ),
     )
   assert published.revision == 2
+}
+
+/// Sessions end after the idle lifetime without use and after the absolute
+/// lifetime regardless of use (review finding F2).
+pub fn sessions_expire_when_idle_test() {
+  let clock = support.clock_new(0)
+  let store =
+    start_with(
+      100,
+      fn() { support.clock_read(clock) },
+      absolute: 1000,
+      idle: 60,
+    )
+  let assert Ok(custody.Installed(receipt)) =
+    custody.install(store, command("a", 0))
+  support.clock_set(clock, 50)
+  let assert Ok(Ok(_)) = custody.get(store, receipt.reference)
+  // Each use restarts the idle period.
+  support.clock_set(clock, 100)
+  let assert Ok(Ok(_)) = custody.get(store, receipt.reference)
+  support.clock_set(clock, 161)
+  assert custody.get(store, receipt.reference) == Ok(Error(Nil))
+}
+
+pub fn sessions_expire_at_the_absolute_lifetime_test() {
+  let clock = support.clock_new(0)
+  let store =
+    start_with(100, fn() { support.clock_read(clock) }, absolute: 100, idle: 60)
+  let assert Ok(custody.Installed(receipt)) =
+    custody.install(store, command("a", 0))
+  support.clock_set(clock, 50)
+  let assert Ok(Ok(_)) = custody.get(store, receipt.reference)
+  support.clock_set(clock, 99)
+  let assert Ok(Ok(_)) = custody.get(store, receipt.reference)
+  support.clock_set(clock, 100)
+  assert custody.get(store, receipt.reference) == Ok(Error(Nil))
+}
+
+/// Abandoned sessions are evicted, with their refresh tokens, even if never
+/// used again.
+pub fn sweep_evicts_abandoned_sessions_test() {
+  let clock = support.clock_new(0)
+  let store =
+    start_with(
+      100,
+      fn() { support.clock_read(clock) },
+      absolute: 1000,
+      idle: 60,
+    )
+  let assert Ok(custody.Installed(_)) = custody.install(store, command("a", 0))
+  let assert Ok(custody.Installed(kept)) =
+    custody.install(store, command("b", 0))
+  support.clock_set(clock, 50)
+  let assert Ok(Ok(_)) = custody.get(store, kept.reference)
+  support.clock_set(clock, 70)
+  let assert Ok(Nil) = custody.sweep(store)
+  assert custody.entry_count(store) == Ok(1)
 }

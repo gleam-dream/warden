@@ -55,6 +55,11 @@ pub type Receipt {
   Receipt(command_id: String, reference: String, revision: Int)
 }
 
+/// Session lifetimes in the store clock's seconds (monotonic in production).
+pub type Lifetime {
+  Lifetime(absolute: Int, idle: Int)
+}
+
 pub type InstallReply {
   /// Installed now, or the receipt of an earlier identical installation.
   Installed(Receipt)
@@ -161,6 +166,9 @@ type Entry(identity) {
     tokens: Tokens,
     revision: Int,
     refresh: RefreshState,
+    /// Store-clock times of installation and of the latest use.
+    created_at: Int,
+    last_used_at: Int,
   )
 }
 
@@ -184,6 +192,9 @@ pub opaque type Message(identity) {
   PublishMsg(Publish, Subject(PublishReply))
   RemoveMsg(String, Subject(Nil))
   HolderDown(process.Down)
+  SweepMsg(Subject(Nil))
+  SweepTick(Subject(Message(identity)))
+  CountMsg(Subject(Int))
   DelayRepliesMsg(DelayedReply, Int, Subject(Nil))
 }
 
@@ -198,6 +209,8 @@ type State(identity) {
     horizon: Option(Int),
     publications: Dict(String, Receipt),
     new_reference: fn() -> String,
+    clock: fn() -> Int,
+    lifetime: Lifetime,
     next_dispatch: Int,
     history_limit: Int,
     reply_delay: #(DelayedReply, Int),
@@ -218,6 +231,8 @@ pub type Store(identity) {
 pub fn start(
   new_reference new_reference: fn() -> String,
   history_limit history_limit: Int,
+  clock clock: fn() -> Int,
+  lifetime lifetime: Lifetime,
   name name: process.Name(Message(identity)),
 ) -> actor.StartResult(Subject(Message(identity))) {
   actor.new_with_initialiser(1000, fn(self) {
@@ -226,7 +241,8 @@ pub fn start(
       process.new_selector()
       |> process.select(self)
       |> process.select_monitors(HolderDown)
-    actor.initialised(initial(new_reference, history_limit))
+    process.send_after(self, sweep_interval_ms, SweepTick(self))
+    actor.initialised(initial(new_reference, history_limit, clock, lifetime))
     |> actor.selecting(selector)
     |> actor.returning(self)
     |> Ok
@@ -239,6 +255,8 @@ pub fn start(
 fn initial(
   new_reference: fn() -> String,
   history_limit: Int,
+  clock: fn() -> Int,
+  lifetime: Lifetime,
 ) -> State(identity) {
   State(
     entries: dict.new(),
@@ -247,6 +265,8 @@ fn initial(
     horizon: None,
     publications: dict.new(),
     new_reference:,
+    clock:,
+    lifetime:,
     next_dispatch: 1,
     history_limit:,
     reply_delay: #(DelayNothing, 0),
@@ -300,6 +320,8 @@ fn handle(
               tokens: command.tokens,
               revision: 1,
               refresh: Idle,
+              created_at: state.clock(),
+              last_used_at: state.clock(),
             )
           let state =
             State(
@@ -317,6 +339,7 @@ fn handle(
         }
       }
     GetMsg(reference, subject) -> {
+      let state = use_entry(state, reference)
       let result = case dict.get(state.entries, reference) {
         Ok(entry) ->
           Ok(Snapshot(
@@ -333,6 +356,7 @@ fn handle(
       actor.continue(state)
     }
     ReserveMsg(reference, provider, revision, command_id, holder, subject) -> {
+      let state = use_entry(state, reference)
       let #(result, state) =
         reserve(state, reference, provider, revision, command_id, holder)
       reply(state, DelayNothing, subject, result)
@@ -344,6 +368,7 @@ fn handle(
       actor.continue(state)
     }
     PublishMsg(command, subject) -> {
+      let state = use_entry(state, command.reference)
       let #(result, state) = publish(state, command)
       reply(state, DelayPublish, subject, result)
       actor.continue(state)
@@ -354,11 +379,65 @@ fn handle(
       actor.continue(state)
     }
     HolderDown(down) -> actor.continue(orphan(state, down))
+    SweepMsg(subject) -> {
+      let state = sweep_expired(state)
+      process.send(subject, Nil)
+      actor.continue(state)
+    }
+    SweepTick(self) -> {
+      process.send_after(self, sweep_interval_ms, SweepTick(self))
+      actor.continue(sweep_expired(state))
+    }
+    CountMsg(subject) -> {
+      process.send(subject, dict.size(state.entries))
+      actor.continue(state)
+    }
     DelayRepliesMsg(kind, delay, subject) -> {
       process.send(subject, Nil)
       actor.continue(State(..state, reply_delay: #(kind, delay)))
     }
   }
+}
+
+/// How often expired sessions are evicted when nobody uses them.
+const sweep_interval_ms = 60_000
+
+fn expired(state: State(identity), entry: Entry(identity), now: Int) -> Bool {
+  now - entry.created_at >= state.lifetime.absolute
+  || now - entry.last_used_at >= state.lifetime.idle
+}
+
+/// A use of a session: evict it if it has expired, otherwise restart its
+/// idle period.
+fn use_entry(state: State(identity), reference: String) -> State(identity) {
+  let now = state.clock()
+  case dict.get(state.entries, reference) {
+    Error(Nil) -> state
+    Ok(entry) ->
+      case expired(state, entry, now) {
+        True -> State(..state, entries: dict.delete(state.entries, reference))
+        False ->
+          State(
+            ..state,
+            entries: dict.insert(
+              state.entries,
+              reference,
+              Entry(..entry, last_used_at: now),
+            ),
+          )
+      }
+  }
+}
+
+/// Evict every expired session, with its tokens.
+fn sweep_expired(state: State(identity)) -> State(identity) {
+  let now = state.clock()
+  State(
+    ..state,
+    entries: dict.filter(state.entries, fn(_, entry) {
+      !expired(state, entry, now)
+    }),
+  )
 }
 
 /// The process holding a reservation died: orphan its generation.
@@ -640,4 +719,16 @@ pub fn delay_replies(
   delay: Int,
 ) -> Result(Nil, CallError) {
   call.call(store.subject, store.timeout, DelayRepliesMsg(kind, delay, _))
+}
+
+/// Test support: evict expired sessions now.
+@internal
+pub fn sweep(store: Store(identity)) -> Result(Nil, CallError) {
+  call.call(store.subject, store.timeout, SweepMsg)
+}
+
+/// Test support: the number of sessions held.
+@internal
+pub fn entry_count(store: Store(identity)) -> Result(Int, CallError) {
+  call.call(store.subject, store.timeout, CountMsg)
 }
