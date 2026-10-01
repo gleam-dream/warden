@@ -1,6 +1,5 @@
 {
   "chrome": "installed Google Chrome",
-  "backend": "native",
   "results": [
     {
       "name": "query login shows verified identity and custom claim",

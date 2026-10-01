@@ -1,15 +1,18 @@
 # warden
 
 A typed Gleam OpenID Connect relying party and OAuth 2.0 client for
-Erlang/OTP, built on [oidcc](https://github.com/erlef/oidcc) 3.9.0 through one
-narrow Erlang boundary.
+Erlang/OTP. Warden owns discovery, key caching, the provider requests and the
+OpenID claim rules; signatures and keys are handled by
+[gose](https://github.com/jtdowney/gose) and kryptos, and HTTPS by Warden's
+own bounded transport over OTP `ssl`. The package contains no handwritten
+Erlang. [oidcc](https://github.com/erlef/oidcc) 3.9.0 is used only in tests,
+as a differential oracle.
 
 Status: **unreleased, pre-production.** The accepted design is
 [warden-design.md](https://github.com/gleam-dream/oversight/blob/master/warden-design.md).
 Production use requires the design's release gates and an independent
-security review of Warden-owned boundaries (transport, oidcc boundary,
-stores). Warden is **not certified**; upstream oidcc certification does not
-transfer. See [docs/PROGRESS.md](docs/PROGRESS.md) for evidence and
+security review of Warden-owned code (transport, protocol and claim rules,
+stores). Warden is **not certified**. See [docs/PROGRESS.md](docs/PROGRESS.md) for evidence and
 remaining limitations.
 
 ## Use

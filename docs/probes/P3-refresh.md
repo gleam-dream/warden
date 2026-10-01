@@ -1,5 +1,9 @@
 # P3 — actual refresh responses through pinned oidcc
 
+> **Status (D13, 2026-10-01).** oidcc is no longer a Warden backend; these
+> findings describe pinned oidcc 3.9.0, which remains a test-only oracle. The
+> probe still runs in its provider suite.
+
 Executable evidence: `test/integration/node/node_refresh_probe_test.erl`
 (node-oidc-provider 9.12.2) and the refresh section of
 `test/integration/keycloak/keycloak_oidcc_probe_test.erl` (Keycloak 26.7.5).

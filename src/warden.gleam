@@ -37,16 +37,15 @@ import gleam/set
 import gleam/string
 import gleam/uri
 import warden/config.{type Config}
-import warden/internal/backend
 import warden/internal/call
 import warden/internal/callback
 import warden/internal/custody_store as custody
 import warden/internal/native/client as native
 import warden/internal/native/provider
-import warden/internal/oidcc_backend as oidcc
 import warden/internal/protocol
 import warden/internal/secure
 import warden/internal/transaction_store as transactions
+import warden/internal/transport
 
 // ===========================================================================
 // Client lifecycle
@@ -56,13 +55,12 @@ import warden/internal/transaction_store as transactions
 pub opaque type Client {
   Client(
     config: Config,
-    backend: backend.Backend,
+    backend: native.Client,
     transactions: transactions.Store,
     custody: custody.Store(VerifiedIdentity),
     provider: String,
     supervisor: Pid,
     clock: fn() -> Int,
-    assume_s256: Bool,
     provider_name: Dynamic,
   )
 }
@@ -182,50 +180,28 @@ pub fn start_with_clock(
   config: Config,
   clock: fn() -> Int,
 ) -> Result(Client, StartError) {
-  start_internal(
-    config,
-    clock,
-    config.pkce_advertisement(config) == config.AssumeS256WhenUnadvertised,
-  )
-}
-
-fn start_internal(
-  config: Config,
-  clock: fn() -> Int,
-  assume_s256: Bool,
-) -> Result(Client, StartError) {
-  let started = case config.backend(config) {
-    config.NativeBackend -> secure.ensure_applications()
-    config.OidccBackend -> oidcc.ensure_started()
-  }
-  use _ <- result.try(case started {
+  use _ <- result.try(case secure.ensure_applications() {
     True -> Ok(Nil)
     False -> Error(ProcessStartFailed)
   })
-  case config.backend(config) {
-    config.NativeBackend -> start_native(config, clock, assume_s256)
-    config.OidccBackend -> start_oidcc(config, clock, assume_s256)
-  }
-}
-
-fn start_native(
-  config: Config,
-  clock: fn() -> Int,
-  assume_s256: Bool,
-) -> Result(Client, StartError) {
   let issuer = config.issuer(config)
   let policy = config.transport_policy(config)
-  // One discovery and JWKS load; the provider cache starts from it.
+  // One discovery and JWKS load within startup_timeout_ms; the provider
+  // cache starts from it.
+  let deadline = transport.monotonic_ms() + config.startup_timeout_ms(config)
   use discovered <- result.try(
-    provider.discover(issuer, policy)
-    |> result.map_error(fn(f) { DiscoveryFailed(provider_failure(f)) }),
+    provider.discover(issuer, policy, deadline)
+    |> result.map_error(fn(f) {
+      case transport.monotonic_ms() >= deadline {
+        True -> StartupTimedOut
+        False -> DiscoveryFailed(provider_failure(f))
+      }
+    }),
   )
-  use _ <- result.try(
-    case compatibility(config, discovered.metadata, assume_s256) {
-      [] -> Ok(Nil)
-      problems -> Error(ProviderIncompatible(problems))
-    },
-  )
+  use _ <- result.try(case compatibility(config, discovered.metadata) {
+    [] -> Ok(Nil)
+    problems -> Error(ProviderIncompatible(problems))
+  })
   let provider_name = process.new_name("warden_provider")
   let timeout = config.store_timeout_ms(config)
   let provider_handle =
@@ -233,71 +209,20 @@ fn start_native(
   start_supervised(
     config,
     clock,
-    assume_s256,
     supervision.worker(fn() {
       provider.start(provider_name, issuer, policy, Some(discovered))
       |> result.map(fn(started) { actor.Started(..started, data: Nil) })
     }),
-    backend.Native(native.new(config, provider_handle, policy, clock)),
+    native.new(config, provider_handle, policy, clock),
     to_dynamic(provider_name),
   )
-}
-
-fn start_oidcc(
-  config: Config,
-  clock: fn() -> Int,
-  assume_s256: Bool,
-) -> Result(Client, StartError) {
-  let adapter = oidcc.adapter(config)
-  let worker_name = process.new_name("warden_provider")
-  let worker = oidcc.worker_name(worker_name)
-  let issuer = config.issuer(config)
-  use client <- result.try(start_supervised(
-    config,
-    clock,
-    assume_s256,
-    supervision.worker(fn() {
-      oidcc.start_worker(worker, issuer, adapter)
-      |> result.map(fn(pid) { actor.Started(pid:, data: Nil) })
-      |> result.replace_error(actor.InitFailed("provider worker"))
-    }),
-    backend.Oidcc(oidcc.new(config, worker, adapter, assume_s256)),
-    to_dynamic(worker_name),
-  ))
-  // One discovery on the success path: the oidcc worker's own load. A
-  // second, diagnostic load runs only when the worker is not ready after a
-  // short delay, to report a typed failure.
-  let checked = case
-    wait_ready(worker, issuer, adapter, config.startup_timeout_ms(config), 0)
-  {
-    Error(error) -> Error(error)
-    Ok(Nil) ->
-      case backend.metadata(client.backend) {
-        Error(failure) -> Error(DiscoveryFailed(provider_failure(failure)))
-        Ok(metadata) if metadata.issuer != issuer ->
-          Error(DiscoveryFailed(IssuerMismatch))
-        Ok(metadata) ->
-          case compatibility(config, metadata, assume_s256) {
-            [] -> Ok(client)
-            problems -> Error(ProviderIncompatible(problems))
-          }
-      }
-  }
-  case checked {
-    Ok(client) -> Ok(client)
-    Error(error) -> {
-      stop(client)
-      Error(error)
-    }
-  }
 }
 
 fn start_supervised(
   config: Config,
   clock: fn() -> Int,
-  assume_s256: Bool,
   provider_child: supervision.ChildSpecification(Nil),
-  backend: backend.Backend,
+  backend: native.Client,
   provider_name: Dynamic,
 ) -> Result(Client, StartError) {
   let transaction_name = process.new_name("warden_transactions")
@@ -342,7 +267,6 @@ fn start_supervised(
         provider: provider_binding(config),
         supervisor: supervisor_pid,
         clock:,
-        assume_s256:,
         provider_name:,
       ))
     }
@@ -352,35 +276,6 @@ fn start_supervised(
 @external(erlang, "gleam_stdlib", "identity")
 fn to_dynamic(value: a) -> Dynamic
 
-const diagnose_after_ms = 1500
-
-fn wait_ready(
-  worker: oidcc.WorkerName,
-  issuer: String,
-  adapter: oidcc.Adapter,
-  remaining: Int,
-  elapsed: Int,
-) -> Result(Nil, StartError) {
-  case oidcc.ready(worker) {
-    True -> Ok(Nil)
-    False if remaining <= 0 -> Error(StartupTimedOut)
-    False if elapsed == diagnose_after_ms ->
-      case oidcc.load_metadata(issuer, adapter) {
-        Error(failure) -> Error(DiscoveryFailed(provider_failure(failure)))
-        Ok(metadata) if metadata.issuer != issuer ->
-          Error(DiscoveryFailed(IssuerMismatch))
-        Ok(_) -> {
-          process.sleep(25)
-          wait_ready(worker, issuer, adapter, remaining - 25, elapsed + 25)
-        }
-      }
-    False -> {
-      process.sleep(25)
-      wait_ready(worker, issuer, adapter, remaining - 25, elapsed + 25)
-    }
-  }
-}
-
 fn provider_binding(config: Config) -> String {
   config.issuer(config) <> " " <> config.client_id(config)
 }
@@ -388,8 +283,9 @@ fn provider_binding(config: Config) -> String {
 fn compatibility(
   config: Config,
   metadata: protocol.Metadata,
-  assume_s256: Bool,
 ) -> List(Incompatibility) {
+  let assume_s256 =
+    config.pkce_advertisement(config) == config.AssumeS256WhenUnadvertised
   let method = config.authentication_method(config)
   let assertion_algorithms = config.assertion_algorithms(config)
   let checks = [
@@ -585,15 +481,13 @@ pub fn begin_login(
     login_extension(options) |> result.map_error(InvalidLoginOption),
   )
   use metadata <- result.try(
-    backend.metadata(client.backend)
+    native.metadata(client.backend)
     |> result.map_error(fn(f) { LoginProviderUnavailable(provider_failure(f)) }),
   )
-  use _ <- result.try(
-    case compatibility(client.config, metadata, client.assume_s256) {
-      [] -> Ok(Nil)
-      problems -> Error(LoginProviderIncompatible(problems))
-    },
-  )
+  use _ <- result.try(case compatibility(client.config, metadata) {
+    [] -> Ok(Nil)
+    problems -> Error(LoginProviderIncompatible(problems))
+  })
   let binding = case browser {
     Some(binding) -> binding
     None -> BrowserBinding(secure.random_token(32))
@@ -606,7 +500,7 @@ pub fn begin_login(
     list.append(config.scopes(client.config), options.scopes) |> list.unique
   let mode = response_mode_name(config.response_mode(client.config))
   use url <- result.try(
-    backend.authorization_url(
+    native.authorization_url(
       client.backend,
       protocol.AuthorizationParams(
         redirect_uri:,
@@ -719,7 +613,7 @@ fn printable(value: String) -> Bool {
   |> all_bytes(fn(b) { b >= 0x20 && b != 0x7F })
 }
 
-/// Defence in depth: the URL oidcc produced must target the discovered
+/// Defence in depth: the authorization URL must target the discovered
 /// authorization endpoint and carry exactly Warden's state, nonce, redirect
 /// URI and S256 challenge, with no request object or request URI.
 fn check_authorization_url(
@@ -999,7 +893,7 @@ fn check_binding(
       let required = case config.issuer_parameter(client.config) {
         config.AlwaysRequireIssuer -> True
         config.RequireIssuerWhenAdvertised ->
-          case backend.metadata(client.backend) {
+          case native.metadata(client.backend) {
             Ok(metadata) -> metadata.issuer_parameter_supported
             // Without current metadata, require the parameter.
             Error(_) -> True
@@ -1036,7 +930,7 @@ fn exchange(
   code: String,
 ) -> Result(LoginCompletion, LoginError) {
   let exchanged =
-    backend.exchange_code(
+    native.exchange_code(
       client.backend,
       code:,
       redirect_uri: material.redirect_uri,
@@ -1468,10 +1362,6 @@ pub type RefreshResult {
 }
 
 pub type RefreshValidationError {
-  /// The pinned oidcc refresh path reports both a changed subject and an
-  /// absent ID token as the same error; Warden cannot tell them apart. An
-  /// absent refresh ID token is not supported by the oidcc backend.
-  SubjectMismatchOrIdTokenAbsent
   /// The refreshed ID token names a different subject.
   RefreshedSubjectMismatch
   RefreshedIssuerMismatch
@@ -1576,11 +1466,7 @@ fn dispatch_refresh(
   recovery: RefreshReservationRecovery,
 ) -> RefreshResult {
   let outcome =
-    backend.refresh(
-      client.backend,
-      refresh_token: dispatch.refresh_token,
-      expected_subject: dispatch.identity.subject,
-    )
+    native.refresh(client.backend, refresh_token: dispatch.refresh_token)
   let settle = fn(settlement, result) {
     case
       custody.settle_refresh(
@@ -1619,11 +1505,6 @@ fn dispatch_refresh(
             other ->
               settle(custody.SettleNotSent, RefreshRejectedByEndpoint(other))
           }
-        protocol.IdTokenInvalid(reason: "subject_mismatch", ..) ->
-          settle(
-            custody.SettleQuarantine,
-            RefreshResponseQuarantined(SubjectMismatchOrIdTokenAbsent, recovery),
-          )
         protocol.IdTokenInvalid(reason:, claim:) ->
           settle(
             custody.SettleQuarantine,
@@ -1732,8 +1613,7 @@ fn refreshed_update(
       Ok(custody.ReplaceWith(id_token.token))
     }
     // OIDC Core §12.2: a refresh response may omit the ID token; the
-    // established identity and logout hint are retained. (The oidcc backend
-    // cannot deliver such a response; see SubjectMismatchOrIdTokenAbsent.)
+    // established identity and logout hint are retained.
     None -> Ok(custody.Retain)
   })
   use scopes <- result.try(case response.scopes {
@@ -1831,7 +1711,7 @@ pub fn userinfo(
     load_current(client, session) |> result.map_error(UserinfoSession),
   )
   use metadata <- result.try(
-    backend.metadata(client.backend)
+    native.metadata(client.backend)
     |> result.map_error(fn(f) { UserinfoFailed(provider_failure(f)) }),
   )
   use _ <- result.try(case metadata.userinfo_endpoint {
@@ -1840,7 +1720,7 @@ pub fn userinfo(
   })
   let subject = snapshot.identity.subject
   case
-    backend.userinfo(
+    native.userinfo(
       client.backend,
       access_token: snapshot.tokens.access_token,
       expected_subject: subject,
@@ -1896,7 +1776,7 @@ pub fn client_credentials(
       }
     }),
   )
-  case backend.client_credentials(client.backend, scopes) {
+  case native.client_credentials(client.backend, scopes) {
     Ok(protocol.TokenResponse(access_token: Some(token), ..) as response) ->
       Ok(ClientToken(
         access_token: access_token(token, response.token_type),
@@ -1953,7 +1833,7 @@ pub fn introspect(
   client: Client,
   token: String,
 ) -> Result(Introspection, IntrospectionError) {
-  case backend.introspect(client.backend, token) {
+  case native.introspect(client.backend, token) {
     Ok(protocol.Inactive) -> Ok(InactiveToken)
     Ok(protocol.Active(..) as a) ->
       Ok(
@@ -2034,13 +1914,13 @@ pub fn logout(
     |> result.replace_error(LogoutStoreUnavailable),
   )
   use metadata <- result.try(
-    backend.metadata(client.backend)
+    native.metadata(client.backend)
     |> result.map_error(fn(f) { LogoutProviderUnavailable(provider_failure(f)) }),
   )
   case metadata.end_session_endpoint {
     None -> Ok(NoEndSessionEndpoint)
     Some(_) ->
-      backend.logout_url(
+      native.logout_url(
         client.backend,
         id_token_hint: snapshot.tokens.id_token,
         post_logout_redirect_uri: options.post_logout_redirect_uri,
@@ -2119,7 +1999,7 @@ pub fn custody_owner(client: Client) -> custody.Store(VerifiedIdentity) {
   client.custody
 }
 
-/// Registered name of the provider process (oidcc worker or native cache).
+/// Registered name of the provider cache process.
 @internal
 pub fn provider_worker(client: Client) -> Dynamic {
   client.provider_name

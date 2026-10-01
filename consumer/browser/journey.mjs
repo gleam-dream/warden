@@ -289,7 +289,6 @@ fs.writeFileSync(
   JSON.stringify(
     {
       chrome: "installed Google Chrome",
-      backend: process.env.WARDEN_BACKEND ?? "native",
       results,
     },
     null,

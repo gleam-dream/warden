@@ -5,7 +5,7 @@ import gleam/dynamic/decode
 import gleam/json
 import gleam/list
 import gleam/option.{None, Some}
-import warden/internal/oidcc_transport
+import oidcc_transport
 import warden/internal/transport.{Failure, Ipv4, Ipv6, NotSent, Sent}
 import warden_test_support as support
 

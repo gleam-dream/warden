@@ -1,5 +1,6 @@
-//// `oidcc_http_adapter` implementation over Warden's Gleam transport, used
-//// while oidcc remains available as the alternate backend (decision D10).
+//// Test-only `oidcc_http_adapter` over Warden's transport, so the raw-oidcc
+//// differential and probes (oidcc is a dev-dependency) send through the same
+//// bounded, verified HTTPS client as Warden.
 ////
 //// oidcc calls `request/5` with `httpc`-shaped arguments and expects an
 //// `httpc`-shaped result. Before oidcc sees a response:
@@ -25,7 +26,7 @@ import warden/internal/transport
 
 /// The adapter term for oidcc's `request_opts.http_adapter`.
 pub fn adapter(policy: transport.Policy) -> Dynamic {
-  to_dynamic(#(atom.create("warden@internal@oidcc_transport"), policy))
+  to_dynamic(#(atom.create("oidcc_transport"), policy))
 }
 
 /// `oidcc_http_adapter:request/5`.

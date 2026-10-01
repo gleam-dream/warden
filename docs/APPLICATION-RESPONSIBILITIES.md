@@ -50,12 +50,11 @@ classifies failures. These duties remain with the application.
 - Opaque values and closures keep secrets out of `string.inspect` and
   Warden's errors, logs and telemetry. They do not protect against VM
   introspection, remote shells or crash dumps: restrict node access, disable
-  or protect `erl_crash.dump`, and do not log raw oidcc telemetry
-  `exception` metadata (oidcc emits it; Warden cannot filter it).
+  or protect `erl_crash.dump`.
 - Client secrets and private JWKs come from the application's secret store;
-  Warden reads them only at the trusted backend boundary.
+  Warden reads them only where it authenticates to the provider.
 - Trust anchors: production uses `SystemTrust`. `AllowLoopbackForTesting`
   and custom trust anchors are for local test providers. Use
   `allowed_hosts` when the provider's hosts are known.
-- Clock: oidcc validates `exp`/`nbf` with zero clock skew against the node
+- Clock: Warden validates `exp`/`nbf` with zero clock skew against the node
   clock; keep hosts synchronised.

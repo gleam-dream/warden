@@ -50,8 +50,7 @@ pub fn no_secret_reaches_errors_logs_or_telemetry_test() {
       )
       |> config.with_trust(config.TrustAnchorsPem(support.ca_pem()))
       |> config.with_destinations(config.AllowLoopbackForTesting)
-      |> config.with_signing_algorithms([config.Rs256])
-      |> support.with_test_backend,
+      |> config.with_signing_algorithms([config.Rs256]),
     )
   let issuer = support.provider_issuer(provider)
 

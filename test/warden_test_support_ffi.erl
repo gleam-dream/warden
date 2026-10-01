@@ -1,7 +1,7 @@
 %% Test support exposed to Gleam tests.
 -module(warden_test_support_ffi).
 
--export([backend_env/0, adapter_request/2, server_start/2, server_url/2, server_requests/1, server_stop/1, ca_der/0, worker_kill/1, worker_alive/1, atom_count/0, process_count/0, form_login/3, print/1, node_reset/0, node_next/2, node_log/0, keycloak_logout/1, clock_new/1, clock_set/2, clock_read/1, provider_start/1, kill_named/1, ca_pem/0, keycloak_login/3, authorize/2, visit/1, count_reset/0, count/1, handle/4, pki_file/1, spawn_collect/2]).
+-export([adapter_request/2, server_start/2, server_url/2, server_requests/1, server_stop/1, ca_der/0, worker_kill/1, worker_alive/1, atom_count/0, process_count/0, form_login/3, print/1, node_reset/0, node_next/2, node_log/0, keycloak_logout/1, clock_new/1, clock_set/2, clock_read/1, provider_start/1, kill_named/1, ca_pem/0, keycloak_login/3, authorize/2, visit/1, count_reset/0, count/1, handle/4, pki_file/1, spawn_collect/2]).
 
 ca_pem() ->
     Dir = warden_test_server:pki_dir(),
@@ -197,9 +197,3 @@ adapter_request({Module, Config}, Url) ->
         {error, {warden_transport, Stage, Class}} -> iolist_to_binary([atom_to_list(Stage), ":", atom_to_list(Class)])
     end.
 
-%% Backend under test: WARDEN_BACKEND=native (default) | oidcc.
-backend_env() ->
-    case os:getenv("WARDEN_BACKEND") of
-        "oidcc" -> <<"oidcc">>;
-        _ -> <<"native">>
-    end.

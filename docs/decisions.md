@@ -2,7 +2,7 @@
 
 Each entry: decision, status, evidence, revisit trigger.
 
-## D1 — Backend: oidcc 3.9.0 (adopted)
+## D1 — Backend: oidcc 3.9.0 (superseded by D10; removed by D13)
 
 - Pinned `oidcc == 3.9.0` with `jose == 1.11.12`, `telemetry == 1.4.2`,
   `telemetry_registry == 0.3.2` (`manifest.toml` checksums). See
@@ -10,7 +10,7 @@ Each entry: decision, status, evidence, revisit trigger.
 - Evidence: P1 probe against Keycloak; login suites.
 - Revisit: a new oidcc release or advisory.
 
-## D2 — Transport: owned bounded HTTP/1.1 adapter (adopted)
+## D2 — Transport: owned bounded HTTP/1.1 adapter (adopted; rewritten in Gleam by D11)
 
 - `src/warden_http.erl` implements `oidcc_http_adapter`. Rejected
   alternative: sibling `gleam-dream/http_gun` (no pre-connection DNS/IP
@@ -21,7 +21,11 @@ Each entry: decision, status, evidence, revisit trigger.
 - Revisit: need for HTTP/2 or streaming, or `http_gun` gaining a
   destination-policy hook.
 
-## D3 — Boundary narrowing of oidcc behaviour (adopted, stricter than upstream)
+## D3 — Boundary narrowing of oidcc behaviour (retired with the oidcc backend, D13)
+
+The native backend never had these behaviours: it builds its own
+authorization URL, sends only Warden's S256 challenge, uses the configured
+client authentication, and keeps introspection results separate.
 
 The boundary (`src/warden_oidcc.erl`) rewrites the oidcc client context before
 every call:
@@ -104,7 +108,10 @@ path returns `sub_invalid`) and reports
   `plain`-only refused under both policies) and
   `unadvertised_pkce_requires_a_confidential_client_test`.
 
-## D8 — Unusable JWKS keys (adopted, Warden fix for an upstream defect)
+## D8 — Unusable JWKS keys (retired with the oidcc backend, D13)
+
+gose skips unusable keys itself; the oidcc/jose defect below still exists
+upstream and is unreported.
 
 - jose 1.11.12 keeps unparseable JWKs as `{error, _}` entries in a key set;
   oidcc 3.9.0's signature fold crashes on them when no earlier key matched,
@@ -116,26 +123,28 @@ path returns `sub_invalid`) and reports
   set position it inspects; not reached by current tests. Both are upstream
   defects to report.
 
-## D9 — Startup performs one discovery (adopted)
+## D9 — Startup performs one discovery (adopted; native since D13)
+
+The native backend discovers once in `warden.start` and seeds the provider
+cache with the result. The text below describes the removed oidcc path.
 
 - Warden validates the metadata the oidcc worker loaded instead of fetching
   discovery itself first; a diagnostic fetch runs only if the worker is not
   ready after 1.5 s, to return a typed failure. Found by the suite's
   discovery-only modules, which finish on the first request.
 
-## D10 — Gleam-native backend on gose (approved 2026-09-30, in progress)
+## D10 — Gleam-native backend on gose (adopted 2026-09-30; sole backend since D13)
 
 - Owner decision (session of 2026-09-30): build a Gleam-native backend on
   gose 2.2.0 (Apache-2.0, commit `961324d3`) and kryptos 1.5.0 behind the
   existing backend seam, following design §5: same contract tests, corpus,
   raw-oidcc differential, interoperability and conformance runs before the
   default switches; oidcc stays as the alternate backend for at least one
-  release. This **revises the accepted design** (§1, §3.1, §3.4: oidcc as
+  release (condition reversed by D13). This **revises the accepted design** (§1, §3.1, §3.4: oidcc as
   default; "no second OIDC core"): Warden will own discovery and JWKS
   caching, token, refresh, userinfo, introspection and logout requests and
   the ID-token claim rules. Cryptography stays in gose/kryptos (Erlang
-  `crypto`/`public_key`). The design document in `gleam-dream/oversight`
-  needs the corresponding update.
+  `crypto`/`public_key`). The oversight design was updated accordingly.
 - Evidence (scratch probe, panva/jose-generated tokens): gose accepted RS256,
   ES256, EdDSA and kid-less RS256; rejected `alg: none` at parse, HS256
   confusion via Warden's allowlist, PS256 against an RS256-tagged key,
@@ -192,7 +201,6 @@ path returns `sub_invalid`) and reports
   `gleam_stdlib < 1.0.0`; the widening to `< 2.0.0` is merged into sinal's
   local `master` (commit `098a2d5`, 93 tests passing on 1.0.5, not pushed).
   sinal needs a published release before Warden can depend on a version.
-- The oidcc alternate keeps emitting oidcc's own untyped telemetry events.
 - Finding for sinal: `sinal.observe`/`attach` raise (`noproc` from
   `telemetry_handler_table`) when the `telemetry` application is not yet
   running, instead of returning an `AttachError`. The reference RP starts
@@ -201,3 +209,35 @@ path returns `sub_invalid`) and reports
   other applications before any request.
 - The native backend starts only `crypto`, `public_key`, `ssl` and
   `telemetry`; it no longer starts the oidcc application.
+
+## D13 — oidcc backend removed before the first release (owner decision, 2026-10-01)
+
+- Decision: remove the oidcc alternate now instead of after one release with
+  the native default. This reverses the D10 condition ("keep oidcc for at
+  least one release"). Rationale: no release exists, so no user depends on a
+  fallback, and both backends produced identical results on every suite.
+- Removed: `src/warden_oidcc.erl` (653 lines), `oidcc_backend.gleam`,
+  the backend seam `backend.gleam`, the public `config.Backend` type and
+  `config.with_backend`, `RefreshValidationError.SubjectMismatchOrIdTokenAbsent`,
+  the boundary tests `test/warden_oidcc_test.erl`, and the second fast-suite
+  run. `src/` contains no Erlang. Warden calls the native client directly;
+  the shared `protocol` types remain the backend contract.
+- Kept as test-only (`[dev-dependencies]`): oidcc 3.9.0 (raw-oidcc
+  differential, design gate V4, and the P1/P3 probes), erlang-jose 1.11.12
+  (scripted provider token signing, independent of gose), telemetry_registry.
+  The oidcc HTTP adapter over Warden's transport moved to
+  `test/oidcc_transport.gleam`.
+- Found while removing:
+  - Gleam compiles a path dependency's `test/` Erlang modules, so the two
+    raw-oidcc probes' `-include_lib("oidcc/...")` broke the consumer and
+    negative-compile builds once oidcc became dev-only. The record
+    definitions are vendored verbatim (Apache-2.0 notices kept) into
+    `test/integration/oidcc_records.hrl`. A published package ships no
+    `test/`, so this affects only path dependents.
+  - `startup_timeout_ms` was enforced only by the oidcc path's wait loop:
+    on the native backend a slow provider could hold `warden.start` for two
+    request timeouts. Discovery and the first key load now share one
+    deadline and report `StartupTimedOut`
+    (`startup_is_bounded_by_startup_timeout_test`).
+- Revisit: a native-backend defect that would have needed the fallback; the
+  oidcc path remains in git history (`9d74e20` and earlier).

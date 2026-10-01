@@ -939,7 +939,7 @@ fn observe(
   Nil
 }
 
-/// Closed snake_case name of a failure class (observation, oidcc adapter).
+/// Closed snake_case name of a failure class (observations, failure mapping).
 pub fn class_name(class: Class) -> String {
   case class {
     InvalidRequest -> "invalid_request"
@@ -1026,6 +1026,7 @@ fn to_dynamic(value: a) -> Dynamic
 @external(erlang, "erlang", "monotonic_time")
 fn monotonic_time(unit: Atom) -> Int
 
-fn monotonic_ms() -> Int {
+/// Monotonic milliseconds, for deadlines.
+pub fn monotonic_ms() -> Int {
   monotonic_time(a("millisecond"))
 }

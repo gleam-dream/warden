@@ -14,6 +14,7 @@ import warden
 import warden/config
 import warden/internal/custody_store
 import warden/internal/transaction_store
+import warden/internal/transport
 import warden_test_support as support
 
 pub fn settings(provider: support.Provider) -> config.Settings {
@@ -27,7 +28,6 @@ pub fn settings(provider: support.Provider) -> config.Settings {
   |> config.with_trust(config.TrustAnchorsPem(support.ca_pem()))
   |> config.with_destinations(config.AllowLoopbackForTesting)
   |> config.with_signing_algorithms([config.Rs256])
-  |> support.with_test_backend
 }
 
 pub fn start(settings: config.Settings) -> warden.Client {
@@ -535,6 +535,28 @@ pub fn unadvertised_pkce_is_accepted_only_by_explicit_policy_test() {
   assert warden.start(assumed) |> result_error
     == Error(warden.ProviderIncompatible([warden.NoS256]))
   support.provider_stop(provider)
+}
+
+/// `startup_timeout_ms` bounds discovery and the first key load together.
+pub fn startup_is_bounded_by_startup_timeout_test() {
+  // Answers every request after 3 s.
+  let server = support.server_start("localhost", support.Slow)
+  let settings =
+    config.new(
+      issuer: support.server_url(server, ""),
+      client_id: "warden-rp",
+      redirect_uri: "https://app.example/callback",
+      authentication: config.ClientSecretBasic(config.secret("sentinel-secret")),
+    )
+    |> config.with_trust(config.TrustAnchorsPem(support.ca_pem()))
+    |> config.with_destinations(config.AllowLoopbackForTesting)
+  let assert Ok(validated) =
+    config.validate(config.Settings(..settings, startup_timeout_ms: 300))
+  let started = transport.monotonic_ms()
+  assert warden.start(validated) |> result_error
+    == Error(warden.StartupTimedOut)
+  assert transport.monotonic_ms() - started < 2000
+  support.server_stop(server)
 }
 
 fn result_error(

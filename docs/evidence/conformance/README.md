@@ -1,23 +1,22 @@
 # OpenID RP conformance evidence (local, not certification)
 
 - Suite: OpenID Foundation conformance suite `release-v5.3.1` (prebuilt
-  images, dev mode), run locally on 2026-09-30 with verified TLS (suite
-  certificate from the disposable test CA).
+  images, dev mode), run locally on 2026-10-01 against the final tree (gose
+  backend only) with verified TLS (suite certificate from the disposable
+  test CA). Evidence: `run-log.txt`, `summary.json`.
 - RP: `consumer/` reference RP (public Warden API), one fresh process per
   module, static client, `client_secret_basic`, plain HTTP request.
 - **Policy label:** every result below was produced with the non-default
   opt-in `AssumeS256WhenUnadvertised` (decision D7), because the suite's OP
   does not advertise `code_challenge_methods_supported` and Warden's default
   policy refuses such providers. Warden still sent and checked its own S256
-  challenge and nonce. The oidcc-backend runs predate the public opt-in and
-  used the equivalent internal harness entry point it replaced.
+  challenge and nonce.
 - Driver: `test/conformance/run.mjs` (`scripts/conformance`). Module logs are
   written to `build/conformance/` (not committed; regenerate with the command).
 
-Both backends produced the same verdict for every module: the oidcc backend
-(`run-log.txt`, `summary-basic_…json`, `summary-refresh.json`) and the native
-gose backend (`WARDEN_BACKEND=native`, the default; `run-log-native.txt`,
-`summary-native-…json`, all plans in one consolidated pass).
+`history/` keeps the 2026-09-30 runs of the removed oidcc backend (decision
+D13). They gave the same verdict for every module; they predate the public
+D7 opt-in and used the equivalent internal harness entry point.
 
 | Plan                                                | PASSED | SKIPPED | REVIEW | FAILED / not run |
 | --------------------------------------------------- | -----: | ------: | -----: | ---------------- |
@@ -41,9 +40,9 @@ Notes:
   (`Illegal test state change: CREATED -> RUNNING`) before any RP request,
   reproduced with no RP running (`build/probe-3rd.mjs`). Infrastructure gap;
   the reference RP's `/initiate-login` route remains unverified by the suite.
-- `oidcc-client-test-refresh-token-invalid-issuer` did not run in the
-  consolidated pass (the previous RP still held the port); it was rerun alone
-  and PASSED (`summary-refresh.json`). The driver now waits for RP exit; in
-  the native run it passed in the consolidated pass.
+- All plans ran in one consolidated pass. (In the first oidcc-backend run,
+  `oidcc-client-test-refresh-token-invalid-issuer` had to be rerun alone
+  because the previous RP still held the port; the driver now waits for RP
+  exit.)
 - Local results are regression evidence only; certification requires a
   hosted submission for an exact Warden release.

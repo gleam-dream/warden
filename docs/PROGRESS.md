@@ -24,37 +24,37 @@ before relying on conversation history. Closed-wave entries are append-only.
   state/issuer, and expiry are rejected with typed outcomes.
 - **Real at MVP:** oidcc 3.9.0 exchange and ID-token validation, entropy,
   PKCE S256, owned bounded HTTPS transport, the in-memory atomic transaction
-  store and custody owner, Keycloak. (Revised by D10: the default backend
-  is now the native gose backend; oidcc is the alternate.)
+  store and custody owner, Keycloak. (Revised by D10 and D13: the gose
+  backend is the only backend; oidcc is a test oracle.)
 - **Exclusions:** authorization-server implementation, implicit/hybrid/password
   flows, JavaScript target (design §1).
 
 ## Current state
 
-- Waves W0–W8 executed (2026-09-30). Branch `warden-implementation`
-  (local, not pushed). Repository private; no release published.
-- Default backend: **native** (gose 2.2.0 + kryptos 1.5.0, Gleam transport,
-  D10/D11). oidcc 3.9.0 remains selectable with
-  `config.with_backend(_, OidccBackend)` for at least one release.
-- Results on the final tree, both backends (`WARDEN_BACKEND=native|oidcc`):
+- Waves W0–W9 executed (2026-09-30 to 2026-10-01). Branch
+  `warden-implementation` (local, not pushed). Repository private; no release
+  published.
+- One backend: Gleam-native on gose 2.2.0 + kryptos 1.5.0 with Warden's
+  transport over OTP `ssl` (D10, D11). The oidcc backend was removed before
+  the first release (D13); oidcc 3.9.0 and erlang-jose remain test-only
+  oracles. `src/` contains no Erlang.
+- Results on the final tree (2026-10-01):
 
-| Suite                                         | Command                                                  | native                                               | oidcc     |
-| --------------------------------------------- | -------------------------------------------------------- | ---------------------------------------------------- | --------- |
-| Fast gate                                     | `nix develop -c scripts/check`                           | 74 pass                                              | 74 pass   |
-| Negative compile, consumer                    | (part of `scripts/check`)                                | 13 cases + positive control; 4 consumer tests — pass | —         |
-| Keycloak 26.7.5                               | `scripts/keycloak up; WARDEN_SUITE=keycloak gleam test`  | 15 pass                                              | 15 pass   |
-| node-oidc-provider 9.12.2 + panva/jose 6.2.12 | `scripts/node-provider up; WARDEN_SUITE=node gleam test` | 7 pass                                               | 7 pass    |
-| Dex v2.45.1, Ory Hydra v26.2.0                | `scripts/interop up; WARDEN_SUITE=interop gleam test`    | 2 pass                                               | 2 pass    |
-| Browser (Chrome 154)                          | `scripts/browser-journey`                                | 9/9                                                  | 9/9       |
-| OIDF RP conformance release-v5.3.1            | `scripts/conformance-suite up; scripts/conformance`      | 34 PASSED, 3 SKIPPED, 3 REVIEW, 1 suite defect       | identical |
+| Suite                                         | Command                                                  | Result                                                                                        |
+| --------------------------------------------- | -------------------------------------------------------- | --------------------------------------------------------------------------------------------- |
+| Fast gate                                     | `nix develop -c scripts/check`                           | 72 pass; 13 negative compile cases + positive control; consumer 4 pass                        |
+| Keycloak 26.7.5                               | `scripts/keycloak up; WARDEN_SUITE=keycloak gleam test`  | 15 pass (includes raw-oidcc probe P1)                                                         |
+| node-oidc-provider 9.12.2 + panva/jose 6.2.12 | `scripts/node-provider up; WARDEN_SUITE=node gleam test` | 7 pass (21-token corpus, 5 client-auth methods, 22-scenario raw-oidcc differential, probe P3) |
+| Dex v2.45.1, Ory Hydra v26.2.0                | `scripts/interop up; WARDEN_SUITE=interop gleam test`    | 2 pass                                                                                        |
+| Browser (Chrome 154)                          | `scripts/browser-journey`                                | 9/9                                                                                           |
+| OIDF RP conformance release-v5.3.1            | `scripts/conformance-suite up; scripts/conformance`      | 34 PASSED, 3 SKIPPED, 3 REVIEW, 1 suite defect                                                |
 
 - Conformance details in [evidence](evidence/conformance/README.md); every
   conformance run uses the **non-default opt-in `AssumeS256WhenUnadvertised`**
   (D7), because the suite's OP omits PKCE metadata. SKIPPED (`alg: none`
   refused), REVIEW (front-channel logout) and the suite defect are not passes.
-- No open owner decisions. D7 resolved as an explicit, confidential-client
-  opt-in (`AssumeS256WhenUnadvertised`); D6 resolved by the native backend.
-  See [decisions.md](decisions.md).
+  The removed oidcc backend's runs are kept under `evidence/**/history/`.
+- No open owner decisions. See [decisions.md](decisions.md).
 
 ## Wave map
 
@@ -69,6 +69,7 @@ before relying on conversation history. Closed-wave entries are append-only.
 | W6   | OIDF RP conformance                                                   | Plan logs or a documented infrastructure gap             |
 | W7   | Hydra/Dex interoperability, operational gates                         | Versions, results, remaining gaps                        |
 | W8   | Native backend (D10), Gleam transport (D11), sinal observations (D12) | Every suite on both backends; default switched           |
+| W9   | PKCE opt-in (D7); oidcc backend removed (D13)                         | Every suite on the single backend                        |
 
 ## Decision register
 
@@ -182,26 +183,45 @@ See [decisions.md](decisions.md).
   oidcc as default and must be updated for D10; D7 open; sinal and the
   stdlib-1 change are unreleased path dependencies.
 
+### W9 — PKCE opt-in and single backend (closed 2026-10-01)
+
+- D7: public, confidential-client-only `AssumeS256WhenUnadvertised`
+  replaced the internal conformance entry point; conformance unchanged.
+- D13 (owner decision): oidcc backend removed before the first release;
+  oidcc, erlang-jose and telemetry_registry moved to dev-dependencies; the
+  oidcc HTTP adapter moved to `test/`; the backend seam collapsed into direct
+  calls on the native client.
+- Found and fixed: `startup_timeout_ms` was not enforced on the native
+  backend (only the oidcc wait loop used it); path dependents failed to build
+  once oidcc headers left the dependency graph (records vendored into
+  `test/integration/oidcc_records.hrl`); supply-chain record lacked the
+  native backend's dependencies.
+- Also this wave: history purge of the conformance database (owner
+  approved); sinal stdlib widening merged locally; oversight design updated
+  (D7, D10–D12, then D13); gose X.509 issue drafted, not filed.
+- Distance to target: design release gates (V0 SBOM/changelog review,
+  independent security review), sinal and gose releases, durable stores.
+
 ## Remaining limitations and gaps
 
 - Production readiness requires the design's release gates and an
-  independent security review of Warden-owned boundaries (transport, native
-  protocol and claim rules, `warden_oidcc`, stores); none has been performed.
-  With the native backend Warden owns more of the protocol surface than with
-  oidcc. Not certified.
+  independent security review of Warden-owned code (transport, protocol and
+  claim rules, stores); none has been performed. Warden owns more of the
+  protocol surface than an oidcc wrapper would. Not certified.
 - In-memory stores only: no durable custody, no multi-node replay authority.
-- oidcc alternate only: absent refresh ID token is quarantined (D6), and
-  error categories for `none`/HS-confusion/bad signature follow oidcc/jose.
 - Explicit gaps unchanged (design §4.8): PAR, JAR, DPoP, JWT-bearer, dynamic
   registration, JARM/FAPI, revocation, device grant, token exchange,
   back/front-channel logout; encrypted ID tokens and signed request objects
   are disabled. Third-party initiated login has a route in the reference RP
   but no conformance verdict.
-- Secret erasure and crash-dump protection are not provided; telemetry
-  `exception` metadata from oidcc may contain terms (application duty).
-- Clock skew is 0 s on both backends; no Warden setting.
+- Secret erasure and crash-dump protection are not provided (application
+  duty).
+- Clock skew is 0 s; no Warden setting.
+- No fallback backend (D13): a native-backend defect has no configuration
+  workaround; the oidcc path remains in git history.
 - Path dependency `sinal = { path = "../sinal" }` until sinal publishes a
   release with the stdlib widening (merged locally, `098a2d5`).
 - gose 2.2.0 rejects JWKs with X.509 members: issue drafted, not filed
   ([draft](handoff/gose-x509-jwk-issue.md)).
-- Upstream defects to report: oidcc `has_kid/2` and unusable-key fold (D8).
+- Upstream defects found but not reported: oidcc `has_kid/2` and the
+  unusable-key fold (D8; no longer affect Warden).

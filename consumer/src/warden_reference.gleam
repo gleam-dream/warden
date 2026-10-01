@@ -15,7 +15,7 @@
 //// | `WARDEN_ALLOW_LOOPBACK` | `1` to allow loopback providers (tests only) |
 //// | `WARDEN_TLS_CERT`, `WARDEN_TLS_KEY` | Serve HTTPS with these files |
 //// | `WARDEN_LOGIN_LIFETIME` | Pending-login lifetime in seconds (default 600) |
-//// | `WARDEN_BACKEND` | `native` (default) or `oidcc` |
+//// | `WARDEN_ASSUME_UNADVERTISED_S256` | `1` to accept a provider that omits PKCE metadata (confidential clients) |
 //// | `PORT` | Listening port (default 18080) |
 
 import envoy
@@ -63,10 +63,6 @@ pub fn main() -> Nil {
       |> list.filter(fn(s) { s != "" }),
     )
     |> config.with_response_mode(response_mode)
-    |> config.with_backend(case env("WARDEN_BACKEND", "native") {
-      "oidcc" -> config.OidccBackend
-      _ -> config.NativeBackend
-    })
     |> config.with_login_lifetime(
       env("WARDEN_LOGIN_LIFETIME", "600") |> int.parse |> result.unwrap(600),
     )

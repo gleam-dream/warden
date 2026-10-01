@@ -2,9 +2,9 @@
 
 ## About this repo
 
-`warden` — A typed Gleam OIDC / OAuth 2.0 Relying Party, built on the certified oidcc backend via FFI.
+`warden` — A typed Gleam OIDC / OAuth 2.0 Relying Party on gose (JOSE) with an owned bounded HTTPS transport.
 
-Ports/wraps: oidcc (erlef/oidcc). Design: [gleam-dream/oversight](https://github.com/gleam-dream/oversight)/warden-design.md.
+Builds on: gose/kryptos; oidcc (erlef/oidcc) 3.9.0 is a test-only oracle. Design: [gleam-dream/oversight](https://github.com/gleam-dream/oversight)/warden-design.md.
 
 ## Tooling
 

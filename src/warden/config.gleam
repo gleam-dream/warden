@@ -206,16 +206,6 @@ pub type Transport {
   )
 }
 
-/// The protocol and JOSE backend (decision D10). The default is
-/// `NativeBackend`.
-pub type Backend {
-  /// Gleam-native backend on gose (JOSE) and Warden's transport. Default.
-  NativeBackend
-  /// oidcc 3.9.0 through Warden's Erlang boundary, kept as the alternate
-  /// backend for at least one release after the default switches.
-  OidccBackend
-}
-
 pub type Settings {
   Settings(
     issuer: String,
@@ -237,7 +227,6 @@ pub type Settings {
     startup_timeout_ms: Int,
     /// Timeout for calls to Warden's own stores.
     store_timeout_ms: Int,
-    backend: Backend,
   )
 }
 
@@ -275,12 +264,7 @@ pub fn new(
     max_pending_logins: 100_000,
     startup_timeout_ms: 15_000,
     store_timeout_ms: 5000,
-    backend: NativeBackend,
   )
-}
-
-pub fn with_backend(settings: Settings, backend: Backend) -> Settings {
-  Settings(..settings, backend:)
 }
 
 pub fn with_scopes(settings: Settings, scopes: List(String)) -> Settings {
@@ -377,7 +361,6 @@ pub opaque type Config {
     max_pending_logins: Int,
     startup_timeout_ms: Int,
     store_timeout_ms: Int,
-    backend: Backend,
   )
 }
 
@@ -476,7 +459,6 @@ pub fn validate(settings: Settings) -> Result(Config, List(ConfigError)) {
         max_pending_logins: settings.max_pending_logins,
         startup_timeout_ms: settings.startup_timeout_ms,
         store_timeout_ms: settings.store_timeout_ms,
-        backend: settings.backend,
       ))
     _, _ -> Error(errors)
   }
@@ -677,11 +659,6 @@ pub fn max_pending_logins(config: Config) -> Int {
 @internal
 pub fn startup_timeout_ms(config: Config) -> Int {
   config.startup_timeout_ms
-}
-
-@internal
-pub fn backend(config: Config) -> Backend {
-  config.backend
 }
 
 @internal

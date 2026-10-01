@@ -28,7 +28,6 @@ pub fn settings(
   |> config.with_scopes(["email", "profile"])
   |> config.with_trust(config.TrustAnchorsPem(support.ca_pem()))
   |> config.with_destinations(config.AllowLoopbackForTesting)
-  |> support.with_test_backend
 }
 
 pub fn start(settings: config.Settings) -> warden.Client {
@@ -56,15 +55,6 @@ pub fn attempt(
   )
 }
 
-/// The native backend names the cause; the oidcc backend reports the
-/// categories oidcc 3.9.0 and jose produce (see the comments below).
-fn precise(native: String, oidcc: String) -> String {
-  case support.backend_name() {
-    "oidcc" -> oidcc
-    _ -> native
-  }
-}
-
 /// The hostile ID-token corpus. Expected Warden outcomes; `"ok"` means a
 /// completed login.
 pub fn corpus() -> List(#(String, String)) {
@@ -72,17 +62,10 @@ pub fn corpus() -> List(#(String, String)) {
     #("resign", "ok"),
     #("es256", "ok"),
     #("good_at_hash", "ok"),
-    // oidcc 3.9.0 folds verification over the key set and keeps
-    // `no_matching_key_with_kid` from keys with other kids, so a tampered
-    // token under a known kid is reported as an unknown key (after a JWKS
-    // refresh). Still a rejection; the category is upstream's.
-    #("bad_signature", precise("BadSignature", "UnknownSigningKey")),
-    // Rejected. jose refuses algorithms outside the allowlist before oidcc
-    // can name them, so oidcc 3.9.0 reports these as signature or key
-    // failures rather than `none_alg_used` / `unsupported_signing_alg`.
-    #("alg_none", precise("UnsignedIdToken", "BadSignature")),
-    #("hs256_confusion", precise("AlgorithmNotAllowed", "UnknownSigningKey")),
-    #("hs256_client_secret", precise("AlgorithmNotAllowed", "BadSignature")),
+    #("bad_signature", "BadSignature"),
+    #("alg_none", "UnsignedIdToken"),
+    #("hs256_confusion", "AlgorithmNotAllowed"),
+    #("hs256_client_secret", "AlgorithmNotAllowed"),
     #("unknown_kid", "UnknownSigningKey"),
     #("no_kid_wrong_key", "BadSignature"),
     #("wrong_iss", "IdTokenIssuerMismatch"),
@@ -206,28 +189,16 @@ pub fn refresh_cases_through_warden_test() {
   let s = session()
   let assert Ok(warden.RefreshCompleted(s2)) = warden.refresh_session(client, s)
   let assert Ok(warden.RefreshCompleted(_)) = warden.refresh_session(client, s2)
-  // Absent ID token: the pinned adapter cannot accept it; quarantined.
+  // Absent ID token: OIDC Core §12.2 allows the omission; identity retained.
   let s = session()
   support.node_next("refresh_token", [support.NodeOmitIdToken])
-  case support.backend_name(), warden.refresh_session(client, s) {
-    // Native: OIDC Core §12.2 allows the omission; identity retained.
-    "native", Ok(warden.RefreshCompleted(refreshed)) -> {
+  case warden.refresh_session(client, s) {
+    Ok(warden.RefreshCompleted(refreshed)) -> {
       let assert Ok(warden.RefreshCompleted(_)) =
         warden.refresh_session(client, refreshed)
       Nil
     }
-    // oidcc 3.9.0 cannot accept it (D6): quarantined.
-    "oidcc",
-      Ok(warden.RefreshResponseQuarantined(
-        warden.SubjectMismatchOrIdTokenAbsent,
-        _,
-      ))
-    -> {
-      let assert Error(warden.RefreshQuarantined) =
-        warden.refresh_session(client, s)
-      Nil
-    }
-    backend, other -> panic as { backend <> ": " <> string.inspect(other) }
+    other -> panic as string.inspect(other)
   }
   // Omitted refresh token: retained, and the provider still accepts it.
   let s = session()

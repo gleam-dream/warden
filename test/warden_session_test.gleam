@@ -135,16 +135,8 @@ pub fn uncertain_and_invalid_refresh_outcomes_quarantine_test() {
     #(support.Delay(1500), "provider"),
     #(support.Status(503, "temporarily_unavailable"), "provider"),
     #(support.Close, "provider"),
-    // The native backend parses the body itself (precise category); the
-    // oidcc adapter refuses invalid JSON at the transport (uncertain).
-    #(support.MalformedJson, case support.backend_name() {
-      "oidcc" -> "provider"
-      _ -> "RefreshResponseMalformed"
-    }),
-    #(support.IdToken("changed_sub"), case support.backend_name() {
-      "oidcc" -> "SubjectMismatchOrIdTokenAbsent"
-      _ -> "RefreshedSubjectMismatch"
-    }),
+    #(support.MalformedJson, "RefreshResponseMalformed"),
+    #(support.IdToken("changed_sub"), "RefreshedSubjectMismatch"),
     #(support.IdToken("changed_nonce"), "RefreshedNonceMismatch"),
     #(
       support.IdToken("changed_auth_time"),
@@ -391,24 +383,14 @@ pub fn refresh_without_id_token_test() {
     support.Refresh(refresh_token_of(provider)),
     support.OmitIdToken,
   )
-  case support.backend_name(), warden.refresh_session(client, session) {
-    "oidcc", result -> {
-      let assert Ok(warden.RefreshResponseQuarantined(
-        warden.SubjectMismatchOrIdTokenAbsent,
-        _,
-      )) = result
-      Nil
-    }
-    _, result -> {
-      let assert Ok(warden.RefreshCompleted(refreshed)) = result
-      assert warden.identity_key(warden.session_identity(refreshed))
-        == warden.identity_key(warden.session_identity(session))
-      assert warden.session_revision(refreshed) == 2
-      let assert Ok(warden.RefreshCompleted(_)) =
-        warden.refresh_session(client, refreshed)
-      Nil
-    }
-  }
+  let assert Ok(warden.RefreshCompleted(refreshed)) =
+    warden.refresh_session(client, session)
+  assert warden.identity_key(warden.session_identity(refreshed))
+    == warden.identity_key(warden.session_identity(session))
+  assert warden.session_revision(refreshed) == 2
+  let assert Ok(warden.RefreshCompleted(_)) =
+    warden.refresh_session(client, refreshed)
+
   warden.stop(client)
   support.provider_stop(provider)
 }

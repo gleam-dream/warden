@@ -150,7 +150,6 @@ pub fn exchange_code(
 pub fn refresh(
   client: Client,
   refresh_token refresh_token: String,
-  expected_subject _expected_subject: String,
 ) -> Result(TokenResponse, Failure) {
   // The subject and other continuity rules are checked by Warden's custody
   // owner; an absent refreshed ID token is permitted (OIDC Core §12.2).

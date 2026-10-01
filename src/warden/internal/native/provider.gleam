@@ -125,10 +125,14 @@ pub fn discovery_url(issuer: String) -> String {
   base <> "/.well-known/openid-configuration"
 }
 
+/// Discovery and the first key load, both within `deadline` (monotonic
+/// milliseconds): each request gets at most the time remaining.
 pub fn discover(
   issuer: String,
   policy: transport.Policy,
+  deadline: Int,
 ) -> Result(Discovered, Failure) {
+  use policy <- result.try(within(policy, deadline))
   use #(document, response) <- result.try(
     get(policy, discovery_url(issuer)) |> json_response,
   )
@@ -140,8 +144,32 @@ pub fn discover(
     True -> Ok(Nil)
     False -> Error(protocol.Policy("issuer_mismatch"))
   })
+  use policy <- result.try(within(policy, deadline))
   use keys <- result.try(load_keys(jwks_uri, policy))
   Ok(Discovered(metadata:, jwks_uri:, keys:, ttl_ms: ttl(response.headers)))
+}
+
+/// Rediscovery outside `warden.start` (restart, reload): two request
+/// timeouts, inside the actor initialiser's three.
+fn background_deadline(policy: transport.Policy) -> Int {
+  transport.monotonic_ms() + 2 * policy.timeout_ms
+}
+
+fn within(
+  policy: transport.Policy,
+  deadline: Int,
+) -> Result(transport.Policy, Failure) {
+  case deadline - transport.monotonic_ms() {
+    remaining if remaining <= 0 ->
+      Error(protocol.Transport(sent: False, class: "timeout"))
+    remaining ->
+      Ok(
+        transport.Policy(
+          ..policy,
+          timeout_ms: int.min(policy.timeout_ms, remaining),
+        ),
+      )
+  }
 }
 
 pub fn load_keys(
@@ -322,7 +350,7 @@ pub fn start(
     // A restarted actor rediscovers; the first start uses the startup load.
     let loaded = case seed {
       Some(discovered) -> Ok(discovered)
-      None -> discover(issuer, policy)
+      None -> discover(issuer, policy, background_deadline(policy))
     }
     case loaded {
       Error(_) -> Error("provider discovery failed")
@@ -390,7 +418,9 @@ fn handle(state: State, message: Message) -> actor.Next(State, Message) {
       actor.continue(state)
     }
     Reload -> {
-      let state = case discover(state.issuer, state.policy) {
+      let state = case
+        discover(state.issuer, state.policy, background_deadline(state.policy))
+      {
         Ok(discovered) -> State(..state, discovered:)
         Error(_) -> state
       }

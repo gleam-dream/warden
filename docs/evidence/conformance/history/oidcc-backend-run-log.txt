@@ -1,3 +1,5 @@
+warning: Git tree '/code/gleam-dream/warden' is dirty
+   Compiled in 0.24s
 PASSED   FINISHED    oidcc-client-basic-certification-test-plan oidcc-client-test  login → 200 /
 PASSED   FINISHED    oidcc-client-basic-certification-test-plan oidcc-client-test-invalid-iss  login → 401 /callback
 PASSED   FINISHED    oidcc-client-basic-certification-test-plan oidcc-client-test-missing-sub  login → 401 /callback
@@ -34,7 +36,11 @@ PASSED   FINISHED    oidcc-client-config-certification-test-plan oidcc-client-te
 PASSED   FINISHED    oidcc-client-config-certification-test-plan oidcc-client-test-signing-key-rotation  login → 200 / | second login → 200 /
 FAILED   INTERRUPTED oidcc-client-test-3rd-party-init-login-test-plan oidcc-client-test-3rd-party-init-login  reference RP refused to start: DiscoveryFailed(ProviderStatus(400, OtherOAuthError))
 PASSED   FINISHED    oidcc-client-refreshtoken-test-plan oidcc-client-test-refresh-token  login → 200 / | refresh → completed
-PASSED   FINISHED    oidcc-client-refreshtoken-test-plan oidcc-client-test-refresh-token-invalid-issuer  login → 200 / | refresh → quarantined
+NONE     WAITING     oidcc-client-refreshtoken-test-plan oidcc-client-test-refresh-token-invalid-issuer  reference RP refused to start: 
+16:25:20.925 [error] Failed to start socket listener: Eaddrinuse
+Error! Failed to eval: warden_reference:main()
+
+Runtime terminating during boot ({#{function=><<"main">>,line=>109,message=><<"Pattern match failed, no pattern matched the value.">>,module=><<"warden_reference">>,start=>4000,value=>
 PASSED   FINISHED    oidcc-client-refreshtoken-test-plan oidcc-client-test-refresh-token-invalid-sub  login → 200 / | refresh → quarantined
 REVIEW   FINISHED    oidcc-client-rp-initiated-logout-rp-basic oidcc-client-test-rp-init-logout  login → 200 / | logout → 303 https://localhost.emobix.co.uk:8443/test/a/warden/end_session_endpoint | end session → redirected to /logged-out?state=present
 REVIEW   FINISHED    oidcc-client-rp-initiated-logout-rp-basic oidcc-client-test-rp-init-logout-other-state  login → 200 / | logout → 303 https://localhost.emobix.co.uk:8443/test/a/warden/end_session_endpoint | end session → redirected to /logged-out?state=present

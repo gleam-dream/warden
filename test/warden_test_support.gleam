@@ -2,8 +2,7 @@
 
 import gleam/dict.{type Dict}
 import gleam/dynamic.{type Dynamic}
-import warden/config
-import warden/internal/oidcc_transport
+import oidcc_transport
 import warden/internal/secure
 import warden/internal/transport
 
@@ -218,21 +217,6 @@ pub fn test_adapter(timeout_ms: Int) -> Dynamic {
 /// As `test_adapter` but with the default destination policy.
 pub fn strict_adapter() -> Dynamic {
   oidcc_transport.adapter(transport.policy(transport.Anchors([ca_der()])))
-}
-
-@external(erlang, "warden_test_support_ffi", "backend_env")
-fn backend_env() -> String
-
-pub fn backend_name() -> String {
-  backend_env()
-}
-
-/// Apply the backend selected by `WARDEN_BACKEND` (native by default).
-pub fn with_test_backend(settings: config.Settings) -> config.Settings {
-  case backend_env() {
-    "oidcc" -> config.with_backend(settings, config.OidccBackend)
-    _ -> config.with_backend(settings, config.NativeBackend)
-  }
 }
 
 pub fn now_seconds() -> Int {
