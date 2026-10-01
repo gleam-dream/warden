@@ -2,6 +2,9 @@
 
 import gleam/dict.{type Dict}
 import gleam/dynamic.{type Dynamic}
+import gleam/dynamic/decode
+import gleam/json
+import gleam/result
 import oidcc_transport
 import warden/internal/secure
 import warden/internal/transport
@@ -221,4 +224,13 @@ pub fn strict_adapter() -> Dynamic {
 
 pub fn now_seconds() -> Int {
   secure.now_seconds()
+}
+
+/// A disposable P-256 private JWK (JSON) for `private_key_jwt` tests.
+@external(erlang, "warden_test_support_ffi", "client_private_jwk")
+pub fn client_private_jwk() -> String
+
+/// The private member `d` of a JWK JSON document.
+pub fn jwk_private_member(jwk: String) -> Result(String, Nil) {
+  json.parse(jwk, decode.at(["d"], decode.string)) |> result.replace_error(Nil)
 }

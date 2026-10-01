@@ -23,6 +23,7 @@ import warden/internal/protocol.{
   type AuthorizationParams, type Failure, type Introspected, type Metadata,
   type TokenResponse,
 }
+import warden/internal/redacted.{type Redacted}
 import warden/internal/transport
 
 pub type Client {
@@ -32,7 +33,7 @@ pub type Client {
     issuer: String,
     client_id: String,
     method: String,
-    credential: Option(String),
+    credential: Redacted(Option(String)),
     id_token_algorithms: List(String),
     assertion_algorithms: List(String),
     clock: fn() -> Int,
@@ -51,7 +52,7 @@ pub fn new(
     issuer: config.issuer(config),
     client_id: config.client_id(config),
     method: config.authentication_method(config),
-    credential: config.trusted_credential(config),
+    credential: redacted.new(config.trusted_credential(config)),
     id_token_algorithms: config.signing_algorithms(config),
     assertion_algorithms: config.assertion_algorithms(config),
     clock:,
@@ -224,7 +225,7 @@ fn client_authentication(
   client: Client,
   metadata: Metadata,
 ) -> Result(#(List(#(String, String)), List(#(String, String))), Nil) {
-  let secret = option.to_result(client.credential, Nil)
+  let secret = option.to_result(redacted.reveal(client.credential), Nil)
   case client.method {
     "none" -> Ok(#([#("client_id", client.client_id)], []))
     "client_secret_basic" -> {

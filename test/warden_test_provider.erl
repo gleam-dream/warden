@@ -103,7 +103,8 @@ handle(Table, #{path := <<"/.well-known/openid-configuration">>}) ->
         <<"scopes_supported">> => [<<"openid">>, <<"email">>, <<"profile">>],
         <<"id_token_signing_alg_values_supported">> => [<<"RS256">>],
         <<"code_challenge_methods_supported">> => [<<"S256">>],
-        <<"token_endpoint_auth_methods_supported">> => [<<"client_secret_basic">>, <<"client_secret_post">>, <<"none">>],
+        <<"token_endpoint_auth_methods_supported">> => [<<"client_secret_basic">>, <<"client_secret_post">>, <<"client_secret_jwt">>, <<"private_key_jwt">>, <<"none">>],
+        <<"token_endpoint_auth_signing_alg_values_supported">> => [<<"ES256">>, <<"RS256">>, <<"HS256">>],
         <<"authorization_response_iss_parameter_supported">> => true
     },
     Merged = maps:merge(Base, lookup(Table, metadata_overrides)),

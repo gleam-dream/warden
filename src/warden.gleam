@@ -43,6 +43,7 @@ import warden/internal/custody_store as custody
 import warden/internal/native/client as native
 import warden/internal/native/provider
 import warden/internal/protocol
+import warden/internal/redacted.{type Redacted}
 import warden/internal/secure
 import warden/internal/transaction_store as transactions
 import warden/internal/transport
@@ -360,19 +361,19 @@ fn response_mode_name(mode: config.ResponseMode) -> String {
 /// Transactions store only its digest. One binding may cover several
 /// concurrent logins (tabs) of the same browser.
 pub opaque type BrowserBinding {
-  BrowserBinding(value: String)
+  BrowserBinding(value: Redacted(String))
 }
 
 /// The cookie value for a binding.
 pub fn browser_binding_value(binding: BrowserBinding) -> String {
-  binding.value
+  redacted.reveal(binding.value)
 }
 
 /// Accept a cookie value as a browser binding. Only values of the shape
 /// Warden generates (43 base64url characters) are accepted.
 pub fn parse_browser_binding(value: String) -> Result(BrowserBinding, Nil) {
   case string.length(value) == 43 && base64url_only(value) {
-    True -> Ok(BrowserBinding(value))
+    True -> Ok(BrowserBinding(redacted.new(value)))
     False -> Error(Nil)
   }
 }
@@ -490,7 +491,7 @@ pub fn begin_login(
   })
   let binding = case browser {
     Some(binding) -> binding
-    None -> BrowserBinding(secure.random_token(32))
+    None -> BrowserBinding(redacted.new(secure.random_token(32)))
   }
   let state = secure.random_token(32)
   let nonce = secure.random_token(32)
@@ -530,7 +531,7 @@ pub fn begin_login(
       nonce:,
       verifier:,
       redirect_uri:,
-      browser_hash: secure.sha256_hex(binding.value),
+      browser_hash: secure.sha256_hex(redacted.reveal(binding.value)),
       max_age: options.max_age,
       created_at: now,
       expires_at: now + config.login_lifetime_seconds(client.config),
@@ -874,7 +875,7 @@ fn check_binding(
   use _ <- result.try(
     case
       secure.constant_time_equal(
-        secure.sha256_hex(binding.value),
+        secure.sha256_hex(redacted.reveal(binding.value)),
         material.browser_hash,
       )
     {
@@ -1048,7 +1049,7 @@ fn accept_identity(
     Some(_) -> Ok(Nil)
     None -> Error(MalformedIdToken)
   })
-  Ok(VerifiedIdentity(issuer:, subject:, claims:))
+  Ok(VerifiedIdentity(issuer:, subject:, claims: redacted.new(claims)))
 }
 
 // ===========================================================================
@@ -1058,7 +1059,7 @@ fn accept_identity(
 /// verification and Warden's binding checks. The stable key is
 /// `(issuer, subject)`; email is an optional claim, never a key.
 pub opaque type VerifiedIdentity {
-  VerifiedIdentity(issuer: String, subject: String, claims: Dynamic)
+  VerifiedIdentity(issuer: String, subject: String, claims: Redacted(Dynamic))
 }
 
 pub type IdentityKey {
@@ -1078,33 +1079,39 @@ pub fn subject(identity: VerifiedIdentity) -> String {
 }
 
 pub fn email(identity: VerifiedIdentity) -> Option(String) {
-  protocol.string_claim(identity.claims, "email")
+  protocol.string_claim(redacted.reveal(identity.claims), "email")
 }
 
 pub fn email_verified(identity: VerifiedIdentity) -> Option(Bool) {
-  decode.run(identity.claims, decode.at(["email_verified"], decode.bool))
+  decode.run(
+    redacted.reveal(identity.claims),
+    decode.at(["email_verified"], decode.bool),
+  )
   |> option.from_result
 }
 
 pub fn name(identity: VerifiedIdentity) -> Option(String) {
-  protocol.string_claim(identity.claims, "name")
+  protocol.string_claim(redacted.reveal(identity.claims), "name")
 }
 
 pub fn preferred_username(identity: VerifiedIdentity) -> Option(String) {
-  protocol.string_claim(identity.claims, "preferred_username")
+  protocol.string_claim(redacted.reveal(identity.claims), "preferred_username")
 }
 
 /// `auth_time` in Unix seconds, when the provider included it.
 pub fn authentication_time(identity: VerifiedIdentity) -> Option(Int) {
-  protocol.int_claim(identity.claims, "auth_time")
+  protocol.int_claim(redacted.reveal(identity.claims), "auth_time")
 }
 
 pub fn acr(identity: VerifiedIdentity) -> Option(String) {
-  protocol.string_claim(identity.claims, "acr")
+  protocol.string_claim(redacted.reveal(identity.claims), "acr")
 }
 
 pub fn amr(identity: VerifiedIdentity) -> List(String) {
-  decode.run(identity.claims, decode.at(["amr"], decode.list(decode.string)))
+  decode.run(
+    redacted.reveal(identity.claims),
+    decode.at(["amr"], decode.list(decode.string)),
+  )
   |> result.unwrap([])
 }
 
@@ -1113,7 +1120,7 @@ pub fn decode_claims(
   identity: VerifiedIdentity,
   decoder: decode.Decoder(a),
 ) -> Result(a, List(decode.DecodeError)) {
-  decode.run(identity.claims, decoder)
+  decode.run(redacted.reveal(identity.claims), decoder)
 }
 
 // ===========================================================================
@@ -1125,7 +1132,7 @@ pub fn decode_claims(
 pub opaque type Session {
   Session(
     identity: VerifiedIdentity,
-    reference: String,
+    reference: Redacted(String),
     revision: Int,
     provider: String,
   )
@@ -1139,7 +1146,7 @@ pub fn session_identity(session: Session) -> VerifiedIdentity {
 /// It is a random bearer value: keep it server-side or in an encrypted,
 /// `HttpOnly` cookie.
 pub fn session_reference(session: Session) -> String {
-  session.reference
+  redacted.reveal(session.reference)
 }
 
 pub fn session_revision(session: Session) -> Int {
@@ -1150,7 +1157,10 @@ pub fn session_revision(session: Session) -> Int {
 /// exact installation command, including token material; recovering never
 /// exchanges the authorization code again.
 pub opaque type CustodyRecovery {
-  CustodyRecovery(provider: String, command: custody.Install(VerifiedIdentity))
+  CustodyRecovery(
+    provider: String,
+    command: Redacted(custody.Install(VerifiedIdentity)),
+  )
 }
 
 pub type CustodyRecoveryResult {
@@ -1191,7 +1201,8 @@ fn install(
       ),
       tokens:,
     )
-  let recovery = CustodyRecovery(provider: client.provider, command:)
+  let recovery =
+    CustodyRecovery(provider: client.provider, command: redacted.new(command))
   case submit_install(client, recovery) {
     Ok(CustodyRecovered(session)) -> Ok(LoginCompleted(session))
     Ok(CustodyStillUncertain(recovery)) -> Ok(LoginRecoveryRequired(recovery))
@@ -1203,14 +1214,14 @@ fn submit_install(
   client: Client,
   recovery: CustodyRecovery,
 ) -> Result(CustodyRecoveryResult, CustodyRecoveryError) {
-  let command = recovery.command
+  let command = redacted.reveal(recovery.command)
   case custody.install(client.custody, command) {
     Error(_) -> Ok(CustodyStillUncertain(recovery))
     Ok(receipt) if receipt.command_id == command.command_id ->
       Ok(
         CustodyRecovered(Session(
           identity: command.identity,
-          reference: receipt.reference,
+          reference: redacted.new(receipt.reference),
           revision: receipt.revision,
           provider: client.provider,
         )),
@@ -1253,7 +1264,7 @@ pub fn restore_session(
   use snapshot <- result.try(load(client, reference))
   Ok(Session(
     identity: snapshot.identity,
-    reference: snapshot.reference,
+    reference: redacted.new(snapshot.reference),
     revision: snapshot.revision,
     provider: snapshot.provider,
   ))
@@ -1280,7 +1291,7 @@ fn load_current(
     True -> Ok(Nil)
     False -> Error(SessionForeign)
   })
-  use snapshot <- result.try(load(client, session.reference))
+  use snapshot <- result.try(load(client, redacted.reveal(session.reference)))
   case snapshot.revision == session.revision {
     True -> Ok(snapshot)
     False -> Error(SessionStale)
@@ -1399,7 +1410,7 @@ pub type RefreshError {
 pub opaque type RefreshReservationRecovery {
   RefreshReservationRecovery(
     provider: String,
-    reference: String,
+    reference: Redacted(String),
     command_id: String,
   )
 }
@@ -1407,14 +1418,14 @@ pub opaque type RefreshReservationRecovery {
 pub fn reservation_recovery_reference(
   recovery: RefreshReservationRecovery,
 ) -> String {
-  recovery.reference
+  redacted.reveal(recovery.reference)
 }
 
 /// Publication-phase recovery: the exact publication command.
 pub opaque type RefreshPublicationRecovery {
   RefreshPublicationRecovery(
     provider: String,
-    command: custody.Publish,
+    command: Redacted(custody.Publish),
     identity: VerifiedIdentity,
   )
 }
@@ -1440,7 +1451,7 @@ pub fn refresh_session(
   case
     custody.reserve_refresh(
       client.custody,
-      session.reference,
+      redacted.reveal(session.reference),
       client.provider,
       session.revision,
       command_id,
@@ -1543,7 +1554,7 @@ fn dispatch_refresh(
             client,
             RefreshPublicationRecovery(
               provider: client.provider,
-              command:,
+              command: redacted.new(command),
               identity: session.identity,
             ),
           )
@@ -1641,7 +1652,7 @@ fn publish(
   client: Client,
   recovery: RefreshPublicationRecovery,
 ) -> Result(RefreshResult, RefreshError) {
-  let command = recovery.command
+  let command = redacted.reveal(recovery.command)
   case custody.publish_refresh(client.custody, command) {
     Error(_) -> Ok(RefreshPublicationUnresolved(recovery))
     Ok(custody.PublishRejected) -> Error(RefreshPublicationRejected)
@@ -1654,7 +1665,7 @@ fn publish(
           Ok(
             RefreshCompleted(Session(
               identity: recovery.identity,
-              reference: receipt.reference,
+              reference: redacted.new(receipt.reference),
               revision: receipt.revision,
               provider: client.provider,
             )),
@@ -1910,7 +1921,7 @@ pub fn logout(
     load_current(client, session) |> result.map_error(LogoutSession),
   )
   use _ <- result.try(
-    custody.remove(client.custody, session.reference)
+    custody.remove(client.custody, redacted.reveal(session.reference))
     |> result.replace_error(LogoutStoreUnavailable),
   )
   use metadata <- result.try(
