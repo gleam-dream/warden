@@ -1,0 +1,31 @@
+#!/bin/sh
+# Real-browser journey through the reference RP against the pinned Keycloak.
+# Requires `scripts/keycloak up` and an installed Google Chrome.
+#   nix develop -c scripts/browser-journey
+set -eu
+ROOT=$(cd "$(dirname "$0")/.." && pwd)
+PKI="$ROOT/build/test-pki"
+cd "$ROOT/consumer"
+gleam build >/dev/null
+[ -d browser/node_modules ] || (cd browser && npm ci --no-fund --no-audit >/dev/null)
+PIDS=""
+cleanup() { for p in $PIDS; do kill "$p" 2>/dev/null || true; done; }
+trap cleanup EXIT INT TERM
+start_app() { # port response_mode lifetime
+  WARDEN_ISSUER=https://localhost:18443/realms/warden WARDEN_CLIENT_ID=warden-rp \
+  WARDEN_CLIENT_SECRET=warden-rp-disposable-secret WARDEN_BASE_URL="https://localhost:$1" \
+  WARDEN_RESPONSE_MODE="$2" WARDEN_LOGIN_LIFETIME="$3" WARDEN_CA_FILE="$PKI/ca.pem" \
+  WARDEN_ALLOW_LOOPBACK=1 WARDEN_TLS_CERT="$PKI/localhost.pem" WARDEN_TLS_KEY="$PKI/localhost.key" PORT="$1" \
+  erl -noshell -pa build/dev/erlang/*/ebin -eval 'warden_reference:main()' >"$ROOT/build/reference-$1.log" 2>&1 &
+  PIDS="$PIDS $!"
+}
+start_app 18080 query 600
+start_app 18081 form_post 600
+start_app 18082 query 3
+for port in 18080 18081 18082; do
+  i=0
+  until curl -sf --cacert "$PKI/ca.pem" "https://localhost:$port/health" >/dev/null; do
+    i=$((i + 1)); [ "$i" -gt 100 ] && { cat "$ROOT/build/reference-$port.log" >&2; exit 1; }; sleep 0.2
+  done
+done
+node browser/journey.mjs

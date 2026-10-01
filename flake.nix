@@ -38,6 +38,8 @@
             gleam
             beam28Packages.erlang
             rebar3
+            openssl
+            nodejs_22
           ];
         };
 

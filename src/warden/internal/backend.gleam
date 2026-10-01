@@ -146,6 +146,11 @@ pub fn worker_name(name: process.Name(a)) -> WorkerName
 // ---------------------------------------------------------------------------
 // Provider
 
+/// Start the OTP applications the boundary needs; False when they cannot
+/// start.
+@external(erlang, "warden_oidcc", "ensure_started")
+pub fn ensure_started() -> Bool
+
 pub fn load_metadata(
   issuer: String,
   adapter: Adapter,

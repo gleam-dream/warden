@@ -19,7 +19,7 @@ pki_dir() ->
     Dir = "build/test-pki",
     case filelib:is_file(filename:join(Dir, "ca.pem")) of
         true -> list_to_binary(Dir);
-        false -> warden_test_pki:generate(Dir)
+        false -> _ = os:cmd("scripts/test-pki"), list_to_binary(Dir)
     end.
 
 start(CertName, Handler) ->

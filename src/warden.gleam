@@ -174,6 +174,10 @@ pub fn start_with_clock(
   config: Config,
   clock: fn() -> Int,
 ) -> Result(Client, StartError) {
+  use _ <- result.try(case backend.ensure_started() {
+    True -> Ok(Nil)
+    False -> Error(ProcessStartFailed)
+  })
   let adapter = backend.adapter(config)
   use metadata <- result.try(
     backend.load_metadata(config.issuer(config), adapter)

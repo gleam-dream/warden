@@ -1,10 +1,36 @@
 #!/bin/sh
-# Generate the disposable test PKI in build/test-pki if it is missing.
+# Generate the disposable test PKI in build/test-pki (if missing) with OpenSSL:
+# a test CA, a localhost leaf (SAN localhost, 127.0.0.1), a wrong-host leaf,
+# an expired leaf and a leaf from an untrusted CA. Keys never leave build/.
+# OpenSSL is used because browsers reject certificates whose RSA algorithm
+# identifiers omit NULL parameters, as Erlang's pkix_test_data produces.
 set -eu
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
-cd "$ROOT"
-if [ ! -f build/test-pki/ca.pem ]; then
-  gleam build >/dev/null
-  erl -noshell -pa build/dev/erlang/*/ebin \
-    -eval 'warden_test_pki:generate("build/test-pki"), halt().'
-fi
+DIR="$ROOT/build/test-pki"
+[ -f "$DIR/ca.pem" ] && [ "${1:-}" != "--force" ] && exit 0
+rm -rf "$DIR"; mkdir -p "$DIR"; cd "$DIR"
+q() { "$@" >/dev/null 2>&1; }
+ca() { # name subject
+  q openssl req -x509 -newkey rsa:2048 -nodes -keyout "$1.cakey" -out "$1.pem" -days 3650 -sha256 \
+    -subj "/CN=$2" -addext "basicConstraints=critical,CA:TRUE" -addext "keyUsage=critical,keyCertSign,cRLSign"
+}
+leaf() { # name ca san [not_before not_after]
+  printf 'subjectAltName=%s\nkeyUsage=critical,digitalSignature,keyEncipherment\nextendedKeyUsage=serverAuth\nbasicConstraints=CA:FALSE\n' "$3" >"$1.ext"
+  q openssl req -newkey rsa:2048 -nodes -keyout "$1.key" -out "$1.csr" -subj "/CN=$1"
+  if [ $# -ge 5 ]; then
+    q openssl x509 -req -in "$1.csr" -CA "$2.pem" -CAkey "$2.cakey" -set_serial "0x$(openssl rand -hex 8)" \
+      -out "$1.pem" -sha256 -extfile "$1.ext" -not_before "$4" -not_after "$5"
+  else
+    q openssl x509 -req -in "$1.csr" -CA "$2.pem" -CAkey "$2.cakey" -set_serial "0x$(openssl rand -hex 8)" \
+      -out "$1.pem" -days 825 -sha256 -extfile "$1.ext"
+  fi
+  rm -f "$1.csr" "$1.ext"
+}
+ca ca "Warden Test CA"
+ca untrusted "Untrusted Test CA"
+leaf localhost ca "DNS:localhost,IP:127.0.0.1"
+leaf wrong_host ca "DNS:wrong.example"
+leaf expired ca "DNS:localhost" 20200101000000Z 20210101000000Z
+leaf self_signed untrusted "DNS:localhost"
+rm -f untrusted.pem
+chmod 600 ./*.key ./*.cakey

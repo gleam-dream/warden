@@ -39,7 +39,8 @@
     logout_url/2,
     classify/1,
     params/1,
-    contain_for_test/1
+    contain_for_test/1,
+    ensure_started/0
 ]).
 
 %% Parameter map from Gleam `[{Key, Value}]`. Keys come from a fixed list so
@@ -62,6 +63,14 @@ param_key(<<"access_token">>) -> access_token;
 param_key(<<"token">>) -> token;
 param_key(<<"id_token_hint">>) -> id_token_hint;
 param_key(<<"post_logout_redirect_uri">>) -> post_logout_redirect_uri.
+
+%% Start the OTP applications Warden's runtime needs (TLS, oidcc and its
+%% dependencies). Idempotent.
+ensure_started() ->
+    case application:ensure_all_started([crypto, public_key, ssl, oidcc]) of
+        {ok, _} -> true;
+        {error, _} -> false
+    end.
 
 %% ---------------------------------------------------------------------------
 %% Construction (trusted startup)
