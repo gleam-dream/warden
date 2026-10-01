@@ -79,7 +79,8 @@ pub type StartError {
 }
 
 pub type Incompatibility {
-  /// The provider does not advertise PKCE `S256`.
+  /// The provider does not advertise PKCE `S256` (with
+  /// `AssumeS256WhenUnadvertised`: it lists other methods only).
   NoS256
   AuthorizationCodeGrantUnsupported
   /// The configured response mode is not advertised.
@@ -181,20 +182,11 @@ pub fn start_with_clock(
   config: Config,
   clock: fn() -> Int,
 ) -> Result(Client, StartError) {
-  start_internal(config, clock, False)
-}
-
-/// NOT PART OF THE ACCEPTED CONTRACT. Conformance-harness policy for
-/// providers that do not advertise `code_challenge_methods_supported` (the
-/// OpenID conformance suite's RP-test OP). Warden still generates, sends and
-/// checks its own S256 challenge and nonce, but cannot confirm from metadata
-/// that the provider enforces PKCE (RFC 9700 §2.1.1). Pending owner decision
-/// D7; never use in production.
-@internal
-pub fn start_assuming_s256_for_conformance(
-  config: Config,
-) -> Result(Client, StartError) {
-  start_internal(config, secure.now_seconds, True)
+  start_internal(
+    config,
+    clock,
+    config.pkce_advertisement(config) == config.AssumeS256WhenUnadvertised,
+  )
 }
 
 fn start_internal(

@@ -49,10 +49,12 @@ before relying on conversation history. Closed-wave entries are append-only.
 | OIDF RP conformance release-v5.3.1            | `scripts/conformance-suite up; scripts/conformance`      | 34 PASSED, 3 SKIPPED, 3 REVIEW, 1 suite defect       | identical |
 
 - Conformance details in [evidence](evidence/conformance/README.md); every
-  conformance run uses the **non-default policy D7**. SKIPPED (`alg: none`
+  conformance run uses the **non-default opt-in `AssumeS256WhenUnadvertised`**
+  (D7), because the suite's OP omits PKCE metadata. SKIPPED (`alg: none`
   refused), REVIEW (front-channel logout) and the suite defect are not passes.
-- Open owner decision: **D7** (PKCE advertisement) in
-  [decisions.md](decisions.md). D6 is resolved by the native backend.
+- No open owner decisions. D7 resolved as an explicit, confidential-client
+  opt-in (`AssumeS256WhenUnadvertised`); D6 resolved by the native backend.
+  See [decisions.md](decisions.md).
 
 ## Wave map
 
@@ -198,6 +200,8 @@ See [decisions.md](decisions.md).
 - Secret erasure and crash-dump protection are not provided; telemetry
   `exception` metadata from oidcc may contain terms (application duty).
 - Clock skew is 0 s on both backends; no Warden setting.
-- Path dependency `sinal = { path = "../sinal" }` on an unmerged branch
-  (`gleam-stdlib-1`); gose 2.2.0 X.509-member rejection to report upstream.
+- Path dependency `sinal = { path = "../sinal" }` until sinal publishes a
+  release with the stdlib widening (merged locally, `098a2d5`).
+- gose 2.2.0 rejects JWKs with X.509 members: issue drafted, not filed
+  ([draft](handoff/gose-x509-jwk-issue.md)).
 - Upstream defects to report: oidcc `has_kid/2` and unusable-key fold (D8).

@@ -77,6 +77,17 @@ pub fn main() -> Nil {
     }
     Error(Nil) -> settings
   }
+  // WARDEN_ASSUME_UNADVERTISED_S256=1 accepts a provider whose metadata
+  // omits code_challenge_methods_supported (decision D7), such as the
+  // OpenID conformance suite's test OP.
+  let settings = case env("WARDEN_ASSUME_UNADVERTISED_S256", "") {
+    "1" ->
+      config.with_pkce_advertisement(
+        settings,
+        config.AssumeS256WhenUnadvertised,
+      )
+    _ -> settings
+  }
   let settings = case env("WARDEN_ALLOW_LOOPBACK", "") {
     "1" -> config.with_destinations(settings, config.AllowLoopbackForTesting)
     _ -> settings
@@ -87,12 +98,7 @@ pub fn main() -> Nil {
       panic as { "invalid configuration: " <> string.inspect(errors) }
   }
   log_outbound_requests()
-  // WARDEN_CONFORMANCE_ASSUME_S256=1 selects a non-default, internal
-  // harness policy (see warden.start_assuming_s256_for_conformance).
-  let started = case env("WARDEN_CONFORMANCE_ASSUME_S256", "") {
-    "1" -> warden.start_assuming_s256_for_conformance(validated)
-    _ -> warden.start(validated)
-  }
+  let started = warden.start(validated)
   let client = case started {
     Ok(client) -> client
     Error(error) ->

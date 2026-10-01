@@ -157,6 +157,22 @@ pub type IssuerParameterPolicy {
   AlwaysRequireIssuer
 }
 
+/// How Warden establishes that the provider supports PKCE `S256`
+/// (RFC 9700 §2.1.1). Warden always sends an `S256` challenge and its
+/// verifier; this policy only decides which providers it accepts.
+pub type PkceAdvertisementPolicy {
+  /// The provider must list `S256` in `code_challenge_methods_supported`.
+  RequireAdvertisedS256
+  /// Also accept a provider whose metadata omits
+  /// `code_challenge_methods_supported` entirely. A provider that lists the
+  /// field without `S256` is still refused. Warden cannot then know whether
+  /// the provider enforces the challenge; for a confidential client, login
+  /// still relies on client authentication and the mandatory nonce against
+  /// code injection (RFC 9700 §2.1.1). Refused for public clients, which have
+  /// no other protection for an intercepted code (decision D7).
+  AssumeS256WhenUnadvertised
+}
+
 /// Trust anchors for provider TLS.
 pub type Trust {
   /// The operating system's trust store (`public_key:cacerts_get/0`).
@@ -211,6 +227,7 @@ pub type Settings {
     signing_algorithms: List(SigningAlgorithm),
     response_mode: ResponseMode,
     issuer_parameter: IssuerParameterPolicy,
+    pkce_advertisement: PkceAdvertisementPolicy,
     transport: Transport,
     /// Pending login lifetime.
     login_lifetime_seconds: Int,
@@ -252,6 +269,7 @@ pub fn new(
     signing_algorithms: [Rs256, Ps256, Es256, EdDsa],
     response_mode: Query,
     issuer_parameter: RequireIssuerWhenAdvertised,
+    pkce_advertisement: RequireAdvertisedS256,
     transport: default_transport(),
     login_lifetime_seconds: 600,
     max_pending_logins: 100_000,
@@ -302,6 +320,13 @@ pub fn with_login_lifetime(settings: Settings, seconds: Int) -> Settings {
   Settings(..settings, login_lifetime_seconds: seconds)
 }
 
+pub fn with_pkce_advertisement(
+  settings: Settings,
+  policy: PkceAdvertisementPolicy,
+) -> Settings {
+  Settings(..settings, pkce_advertisement: policy)
+}
+
 pub fn with_issuer_parameter(
   settings: Settings,
   policy: IssuerParameterPolicy,
@@ -327,6 +352,8 @@ pub type ConfigError {
   InvalidTrustAnchors
   InvalidAllowedHost(String)
   InvalidLimit(String)
+  /// `AssumeS256WhenUnadvertised` with `PublicClient`.
+  UnadvertisedPkceRequiresConfidentialClient
 }
 
 /// A validated configuration.
@@ -340,6 +367,7 @@ pub opaque type Config {
     signing_algorithms: List(String),
     response_mode: ResponseMode,
     issuer_parameter: IssuerParameterPolicy,
+    pkce_advertisement: PkceAdvertisementPolicy,
     trust: TrustAnchors,
     destinations: DestinationPolicy,
     allowed_hosts: Option(List(String)),
@@ -396,6 +424,11 @@ pub fn validate(settings: Settings) -> Result(Config, List(ConfigError)) {
     limit(settings.startup_timeout_ms, 1, 600_000, "startup_timeout_ms"),
     limit(settings.store_timeout_ms, 1, 600_000, "store_timeout_ms"),
     result.map(trust, fn(_) { Nil }),
+    check(
+      settings.pkce_advertisement == RequireAdvertisedS256
+        || settings.authentication != PublicClient,
+      UnadvertisedPkceRequiresConfidentialClient,
+    ),
   ]
   let scope_errors =
     scopes
@@ -430,6 +463,7 @@ pub fn validate(settings: Settings) -> Result(Config, List(ConfigError)) {
         signing_algorithms: algorithms,
         response_mode: settings.response_mode,
         issuer_parameter: settings.issuer_parameter,
+        pkce_advertisement: settings.pkce_advertisement,
         trust: anchors,
         destinations: settings.transport.destinations,
         allowed_hosts: option.map(settings.transport.allowed_hosts, list.map(
@@ -624,6 +658,10 @@ pub fn response_mode(config: Config) -> ResponseMode {
 @internal
 pub fn issuer_parameter(config: Config) -> IssuerParameterPolicy {
   config.issuer_parameter
+}
+
+pub fn pkce_advertisement(config: Config) -> PkceAdvertisementPolicy {
+  config.pkce_advertisement
 }
 
 @internal

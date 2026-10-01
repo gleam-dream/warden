@@ -5,11 +5,12 @@
   certificate from the disposable test CA).
 - RP: `consumer/` reference RP (public Warden API), one fresh process per
   module, static client, `client_secret_basic`, plain HTTP request.
-- **Policy label:** every result below was produced with the internal,
-  non-default harness policy `warden.start_assuming_s256_for_conformance`,
-  because the suite's OP does not advertise `code_challenge_methods_supported`
-  and Warden's default policy refuses such providers (decision D7). Warden
-  still sent and checked its own S256 challenge and nonce.
+- **Policy label:** every result below was produced with the non-default
+  opt-in `AssumeS256WhenUnadvertised` (decision D7), because the suite's OP
+  does not advertise `code_challenge_methods_supported` and Warden's default
+  policy refuses such providers. Warden still sent and checked its own S256
+  challenge and nonce. The oidcc-backend runs predate the public opt-in and
+  used the equivalent internal harness entry point it replaced.
 - Driver: `test/conformance/run.mjs` (`scripts/conformance`). Module logs are
   written to `build/conformance/` (not committed; regenerate with the command).
 

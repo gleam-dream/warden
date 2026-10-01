@@ -124,7 +124,7 @@ function startApp(mode) {
     WARDEN_TLS_CERT: path.join(PKI, "localhost.pem"),
     WARDEN_TLS_KEY: path.join(PKI, "localhost.key"),
     PORT: String(APP_PORT),
-    WARDEN_CONFORMANCE_ASSUME_S256: process.env.ASSUME_S256 ?? "1",
+    WARDEN_ASSUME_UNADVERTISED_S256: process.env.ASSUME_S256 ?? "1",
   };
   const ebin = fs
     .readdirSync(path.join(ROOT, "consumer/build/dev/erlang"))
@@ -425,7 +425,7 @@ fs.writeFileSync(
       issuer: ISSUER,
       policy:
         (process.env.ASSUME_S256 ?? "1") === "1"
-          ? "NON-DEFAULT: S256 assumed without metadata advertisement (decision D7 pending)"
+          ? "NON-DEFAULT: AssumeS256WhenUnadvertised (public opt-in, decision D7)"
           : "default",
       summary,
     },

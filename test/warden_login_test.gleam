@@ -508,6 +508,35 @@ pub fn incompatible_providers_are_rejected_at_startup_test() {
   })
 }
 
+/// D7: `AssumeS256WhenUnadvertised` accepts only a provider that omits
+/// `code_challenge_methods_supported`; Warden still sends its S256 challenge.
+pub fn unadvertised_pkce_is_accepted_only_by_explicit_policy_test() {
+  let assume = fn(provider) {
+    settings(provider)
+    |> config.with_pkce_advertisement(config.AssumeS256WhenUnadvertised)
+  }
+  let provider = support.provider_start(support.UnadvertisedPkce)
+  let assert Ok(strict) = config.validate(settings(provider))
+  assert warden.start(strict) |> result_error
+    == Error(warden.ProviderIncompatible([warden.NoS256]))
+  let assert Ok(assumed) = config.validate(assume(provider))
+  assert config.pkce_advertisement(assumed) == config.AssumeS256WhenUnadvertised
+  let assert Ok(client) = warden.start(assumed)
+  let assert Ok(redirect) =
+    warden.begin_login(client, None, warden.default_login())
+  assert param(redirect.url, "code_challenge_method") == "S256"
+  assert string.length(param(redirect.url, "code_challenge")) == 43
+  warden.stop(client)
+  support.provider_stop(provider)
+
+  // Advertising methods without S256 is refused under either policy.
+  let provider = support.provider_start(support.NoS256)
+  let assert Ok(assumed) = config.validate(assume(provider))
+  assert warden.start(assumed) |> result_error
+    == Error(warden.ProviderIncompatible([warden.NoS256]))
+  support.provider_stop(provider)
+}
+
 fn result_error(
   r: Result(warden.Client, warden.StartError),
 ) -> Result(Nil, warden.StartError) {

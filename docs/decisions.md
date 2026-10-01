@@ -65,23 +65,44 @@ installed and the session identity is retained. A present ID token must keep
 path returns `sub_invalid`) and reports
 `RefreshResponseQuarantined(SubjectMismatchOrIdTokenAbsent, _)`.
 
-## D7 — PKCE S256 advertisement required (open, owner decision)
+## D7 — PKCE S256 advertisement (resolved 2026-09-30: explicit opt-in)
 
 - Evidence: the OpenID conformance suite's RP-test OP (release-v5.3.1) does
-  not publish `code_challenge_methods_supported`. Warden's accepted contract
-  (design §3.2/§3.3; RFC 9700 §2.1.1 "ensure the AS supports PKCE") rejects
-  such providers at startup with `ProviderIncompatible([NoS256])`, so no RP
-  plan runs under the default policy.
-- Conformance evidence was produced with the internal, non-default
-  `warden.start_assuming_s256_for_conformance`: Warden still generates,
-  sends and verifies its own S256 challenge and nonce, but tolerates the
-  missing advertisement (oidcc is told S256 is supported). Every result from
-  it is labelled in `docs/evidence/conformance/`.
-- Options: (a) keep the contract and treat conformance runs as evidence under
-  a documented harness policy (recommended); (b) add a public, explicit
-  opt-in policy for providers that support but do not advertise PKCE;
-  (c) require advertisement unconditionally and accept no local conformance
-  evidence.
+  not publish `code_challenge_methods_supported`. Warden's default (design
+  §3.2; RFC 9700 §2.1.1 "ensure the AS supports PKCE") rejects such providers
+  at startup with `ProviderIncompatible([NoS256])`, so no RP plan runs under
+  the default policy.
+- Owner decision: option (b), a public, explicit opt-in.
+  `config.with_pkce_advertisement(_, AssumeS256WhenUnadvertised)` also
+  accepts a provider whose metadata **omits** the field. A provider that
+  lists methods without `S256` is still refused, and the default stays
+  `RequireAdvertisedS256`. The internal
+  `warden.start_assuming_s256_for_conformance` is removed; the reference RP
+  sets the policy from `WARDEN_ASSUME_UNADVERTISED_S256=1`.
+- Security consequences under the opt-in:
+  - Warden still generates, sends and checks its own S256 challenge and
+    verifier; nothing about the request weakens.
+  - Warden cannot know whether the provider enforces the challenge. A
+    provider that ignores PKCE silently removes PKCE's protection against an
+    intercepted or injected code: the code becomes redeemable without the
+    verifier by anyone who also holds the client's credentials.
+  - For a confidential client, the attacker additionally needs the client
+    authentication, and Warden's mandatory nonce binds the returned ID token
+    to this browser's login; RFC 9700 §2.1.1 accepts nonce as the
+    code-injection countermeasure for confidential OpenID Connect clients.
+    State still prevents login CSRF.
+  - For a public client nothing else protects an intercepted code, so
+    validation refuses the opt-in with `PublicClient`
+    (`UnadvertisedPkceRequiresConfidentialClient`).
+  - Access tokens from such a login carry no PKCE assurance. Applications
+    that need it for a provider must keep the default policy.
+  - Metadata cannot be stripped by a network attacker: discovery is fetched
+    over verified TLS from the exact issuer. An attacker controlling the
+    issuer's metadata already controls the provider.
+- Tests: `unadvertised_pkce_is_accepted_only_by_explicit_policy_test` (absent
+  field refused by default, accepted with the opt-in and still sends S256;
+  `plain`-only refused under both policies) and
+  `unadvertised_pkce_requires_a_confidential_client_test`.
 
 ## D8 — Unusable JWKS keys (adopted, Warden fix for an upstream defect)
 
@@ -168,10 +189,9 @@ path returns `sub_invalid`) and reports
   the transport's closed class). Queries, headers and bodies are never
   observed (redaction test covers it).
 - sinal is a path dependency on the sibling repository. It pinned
-  `gleam_stdlib < 1.0.0`; branch `gleam-stdlib-1` (commit `77fcbef`, local in
-  `gleam-dream/sinal`) widens it to `< 2.0.0` with its 93 tests passing on
-  1.0.5. That branch needs merging and a release before Warden can depend on
-  a published version.
+  `gleam_stdlib < 1.0.0`; the widening to `< 2.0.0` is merged into sinal's
+  local `master` (commit `098a2d5`, 93 tests passing on 1.0.5, not pushed).
+  sinal needs a published release before Warden can depend on a version.
 - The oidcc alternate keeps emitting oidcc's own untyped telemetry events.
 - Finding for sinal: `sinal.observe`/`attach` raise (`noproc` from
   `telemetry_handler_table`) when the `telemetry` application is not yet

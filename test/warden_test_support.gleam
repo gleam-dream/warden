@@ -64,6 +64,7 @@ pub type Provider
 pub type ProviderVariant {
   Standard
   NoS256
+  UnadvertisedPkce
   RequiresPar
   NoEndSession
   WrongIssuer

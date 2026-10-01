@@ -131,6 +131,23 @@ pub fn trust_anchors_must_parse_test() {
     config.validate(config.with_trust(base(), config.TrustAnchorsPem("not pem")))
 }
 
+pub fn unadvertised_pkce_requires_a_confidential_client_test() {
+  let assume = fn(settings) {
+    config.with_pkce_advertisement(settings, config.AssumeS256WhenUnadvertised)
+  }
+  let assert Error([config.UnadvertisedPkceRequiresConfidentialClient]) =
+    config.validate(
+      config.Settings(..base(), authentication: config.PublicClient)
+      |> assume,
+    )
+  let assert Ok(_) = config.validate(assume(base()))
+  let assert Ok(strict) =
+    config.validate(
+      config.Settings(..base(), authentication: config.PublicClient),
+    )
+  assert config.pkce_advertisement(strict) == config.RequireAdvertisedS256
+}
+
 pub fn secrets_do_not_appear_in_inspection_test() {
   let settings =
     config.new(
