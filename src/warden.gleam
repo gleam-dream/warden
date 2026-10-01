@@ -1082,8 +1082,10 @@ fn accept_identity(
       case protocol.int_claim(claims, "auth_time") {
         Some(auth_time) -> {
           let age = client.clock() - auth_time
-          // A future authentication time is not a recent authentication.
-          case age >= 0 && age <= max_age {
+          // A future authentication time is not a recent authentication,
+          // beyond the provider clock tolerance.
+          let tolerance = config.clock_tolerance_seconds(client.config)
+          case age >= 0 - tolerance && age <= max_age {
             True -> Ok(Nil)
             False -> Error(AuthenticationTooOld)
           }

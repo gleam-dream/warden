@@ -17,6 +17,7 @@ import gleam/bool
 import gleam/crypto
 import gleam/dynamic.{type Dynamic}
 import gleam/dynamic/decode
+import gleam/float
 import gleam/json
 import gleam/list
 import gleam/option.{type Option, None, Some}
@@ -38,6 +39,9 @@ pub type Expectations {
     nonce: Option(String),
     access_token: Option(String),
     now: Timestamp,
+    /// Seconds a provider clock may run ahead for `iat` and `nbf`; never
+    /// applied to `exp`.
+    tolerance: Int,
   )
 }
 
@@ -192,7 +196,8 @@ fn verify_signed(
       ..jwt.default_validation(),
       issuer:,
       audience:,
-      clock_skew: 0,
+      // Tolerance covers `iat` and `nbf`; `exp` is checked strictly below.
+      clock_skew: expect.tolerance,
       require_exp:,
     )
   let compatible =
@@ -217,10 +222,31 @@ fn verify_signed(
         jwt.verifier(alg, keys: candidates, options:)
         |> result.replace_error(Rejection("unknown_key", None)),
       )
-      jwt.verify_and_validate(verifier, token:, now: expect.now)
-      |> result.map_error(rejection)
+      use verified <- result.try(
+        jwt.verify_and_validate(verifier, token:, now: expect.now)
+        |> result.map_error(rejection),
+      )
+      // gose applied the tolerance to `exp` as well; expiry gets none.
+      case jwt.decode(verified, decode.at(["exp"], seconds())) {
+        Ok(exp) ->
+          case unix_seconds(expect.now) < exp {
+            True -> Ok(verified)
+            False -> reject("expired")
+          }
+        // Absent (allowed for userinfo); gose enforced presence otherwise.
+        Error(_) -> Ok(verified)
+      }
     }
   }
+}
+
+/// A NumericDate, truncated like gose does for fractional values.
+fn seconds() -> decode.Decoder(Int) {
+  decode.one_of(decode.int, [decode.map(decode.float, float.truncate)])
+}
+
+fn unix_seconds(now: Timestamp) -> Int {
+  timestamp.to_unix_seconds(now) |> float.truncate
 }
 
 fn rejection(error: jwt.JwtError) -> Rejection {

@@ -41,6 +41,7 @@ fn expectations(access_token) -> jose.Expectations {
     nonce: Some("n"),
     access_token:,
     now: timestamp.system_time(),
+    tolerance: 5,
   )
 }
 
@@ -96,4 +97,18 @@ pub fn signed_userinfo_without_exp_verifies_test() {
   }
   assert userinfo([]) == "ok"
   assert userinfo([#("exp", json.int(now() - 10))]) == "expired"
+}
+
+/// A provider clock slightly ahead is tolerated for `iat` and `nbf`; `exp`
+/// gets no tolerance (review finding J3).
+pub fn clock_tolerance_covers_iat_and_nbf_but_not_exp_test() {
+  let check = fn(overrides) {
+    reason(verify("RS256", "{}", claims(overrides), None))
+  }
+  assert check([#("iat", json.int(now() + 3))]) == "ok"
+  assert check([#("nbf", json.int(now() + 3))]) == "ok"
+  assert check([#("iat", json.int(now() + 10))]) == "not_yet_valid"
+  assert check([#("nbf", json.int(now() + 10))]) == "not_yet_valid"
+  assert check([#("exp", json.int(now() - 1))]) == "expired"
+  assert check([#("exp", json.int(now()))]) == "expired"
 }

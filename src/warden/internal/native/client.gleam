@@ -37,6 +37,7 @@ pub type Client {
     id_token_algorithms: List(String),
     assertion_algorithms: List(String),
     clock: fn() -> Int,
+    clock_tolerance: Int,
   )
 }
 
@@ -56,6 +57,7 @@ pub fn new(
     id_token_algorithms: config.signing_algorithms(config),
     assertion_algorithms: config.assertion_algorithms(config),
     clock:,
+    clock_tolerance: int.max(0, config.clock_tolerance_seconds(config)),
   )
 }
 
@@ -336,6 +338,7 @@ fn expectations(
     nonce:,
     access_token:,
     now: timestamp.from_unix_seconds(client.clock()),
+    tolerance: client.clock_tolerance,
   )
 }
 

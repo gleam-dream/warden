@@ -517,6 +517,32 @@ pub fn login_lifetime_follows_the_monotonic_clock_test() {
   support.provider_stop(provider)
 }
 
+/// An `auth_time` a few seconds ahead (provider clock) is within the clock
+/// tolerance (J3).
+pub fn slightly_future_authentication_time_is_tolerated_test() {
+  let provider = support.provider_start(support.Standard)
+  support.set_int_claims(
+    provider,
+    dict.from_list([#("auth_time", support.now_seconds() + 3)]),
+  )
+  let client = start(settings(provider))
+  let assert Ok(redirect) =
+    warden.begin_login(
+      client,
+      None,
+      warden.LoginOptions(..warden.default_login(), max_age: Some(300)),
+    )
+  let query = authorize(provider, redirect, "tolerated-code")
+  let assert Ok(warden.LoginCompleted(_)) =
+    warden.complete_login(
+      client,
+      warden.QueryCallback(query),
+      Some(redirect.browser_binding),
+    )
+  warden.stop(client)
+  support.provider_stop(provider)
+}
+
 pub fn login_options_are_validated_test() {
   let provider = support.provider_start(support.Standard)
   let client = start(settings(provider))

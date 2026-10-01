@@ -250,6 +250,9 @@ pub type Settings {
     /// Session lifetime in custody (see `with_session_lifetime`).
     session_absolute_seconds: Int,
     session_idle_seconds: Int,
+    /// Clock tolerance for `iat`, `nbf`, `auth_time` (see
+    /// `with_clock_tolerance`).
+    clock_tolerance_seconds: Int,
   )
 }
 
@@ -289,6 +292,7 @@ pub fn new(
     store_timeout_ms: 5000,
     session_absolute_seconds: 43_200,
     session_idle_seconds: 3600,
+    clock_tolerance_seconds: 5,
   )
 }
 
@@ -395,6 +399,7 @@ pub opaque type Config {
     store_timeout_ms: Int,
     session_absolute_seconds: Int,
     session_idle_seconds: Int,
+    clock_tolerance_seconds: Int,
   )
 }
 
@@ -440,6 +445,7 @@ pub fn validate(settings: Settings) -> Result(Config, List(ConfigError)) {
     limit(settings.max_pending_logins, 1, 10_000_000, "max_pending_logins"),
     limit(settings.startup_timeout_ms, 1, 600_000, "startup_timeout_ms"),
     limit(settings.store_timeout_ms, 1, 600_000, "store_timeout_ms"),
+    limit(settings.clock_tolerance_seconds, 0, 300, "clock_tolerance_seconds"),
     result.map(trust, fn(_) { Nil }),
     check(
       settings.pkce_advertisement == RequireAdvertisedS256
@@ -503,6 +509,7 @@ pub fn validate(settings: Settings) -> Result(Config, List(ConfigError)) {
         store_timeout_ms: settings.store_timeout_ms,
         session_absolute_seconds: settings.session_absolute_seconds,
         session_idle_seconds: settings.session_idle_seconds,
+        clock_tolerance_seconds: settings.clock_tolerance_seconds,
       ))
     _, _ -> Error(errors)
   }
@@ -864,4 +871,14 @@ pub fn with_session_lifetime(
 /// `#(absolute_seconds, idle_seconds)`.
 pub fn session_lifetime(config: Config) -> #(Int, Int) {
   #(config.session_absolute_seconds, config.session_idle_seconds)
+}
+
+/// Seconds a provider's clock may run ahead of this node for `iat`, `nbf`
+/// and `auth_time`; `exp` never gets tolerance. Default 5, at most 300.
+pub fn with_clock_tolerance(settings: Settings, seconds: Int) -> Settings {
+  Settings(..settings, clock_tolerance_seconds: seconds)
+}
+
+pub fn clock_tolerance_seconds(config: Config) -> Int {
+  config.clock_tolerance_seconds
 }

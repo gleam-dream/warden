@@ -324,3 +324,13 @@ pub fn session_lifetime_defaults_and_validation_test() {
   let assert Error([config.InvalidSessionLifetime]) =
     config.validate(config.with_session_lifetime(base(), absolute: 600, idle: 0))
 }
+
+pub fn clock_tolerance_defaults_and_validation_test() {
+  let assert Ok(validated) = config.validate(base())
+  assert config.clock_tolerance_seconds(validated) == 5
+  let assert Ok(strict) =
+    config.validate(config.with_clock_tolerance(base(), 0))
+  assert config.clock_tolerance_seconds(strict) == 0
+  let assert Error([config.InvalidLimit("clock_tolerance_seconds")]) =
+    config.validate(config.with_clock_tolerance(base(), 301))
+}
