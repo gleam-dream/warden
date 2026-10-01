@@ -97,6 +97,8 @@ pub type Incompatibility {
   RequiresRequestObjects
   /// The authorization endpoint is not an absolute `https` URI.
   InsecureAuthorizationEndpoint
+  /// The end-session endpoint is not an absolute `https` URI.
+  InsecureEndSessionEndpoint
   MissingTokenEndpoint
 }
 
@@ -291,8 +293,11 @@ fn compatibility(
   let assertion_algorithms = config.assertion_algorithms(config)
   let checks = [
     #(
-      list.contains(metadata.code_challenge_methods, "S256")
-        || { assume_s256 && metadata.code_challenge_methods == [] },
+      case metadata.code_challenge_methods {
+        Some(methods) -> list.contains(methods, "S256")
+        // Omitted entirely: acceptable only under the explicit opt-in.
+        None -> assume_s256
+      },
       NoS256,
     ),
     #(
@@ -328,6 +333,11 @@ fn compatibility(
     #(!metadata.requires_par, RequiresPushedAuthorization),
     #(!metadata.requires_signed_request_object, RequiresRequestObjects),
     #(https_uri(metadata.authorization_endpoint), InsecureAuthorizationEndpoint),
+    #(
+      option.map(metadata.end_session_endpoint, https_uri)
+        |> option.unwrap(True),
+      InsecureEndSessionEndpoint,
+    ),
     #(option.is_some(metadata.token_endpoint), MissingTokenEndpoint),
   ]
   list.filter_map(checks, fn(check) {
@@ -627,11 +637,16 @@ fn check_authorization_url(
   client_id client_id: String,
 ) -> Result(Nil, BeginLoginError) {
   let incompatible = Error(LoginProviderIncompatible([NoS256]))
-  case string.split_once(url, "?") {
-    Error(Nil) -> incompatible
-    Ok(#(base, query)) ->
-      case base == endpoint, uri.parse_query(query) {
-        True, Ok(params) -> {
+  // The endpoint may carry its own query; Warden's parameters follow it.
+  let prefix = case string.contains(endpoint, "?") {
+    True -> endpoint <> "&"
+    False -> endpoint <> "?"
+  }
+  case string.starts_with(url, prefix) {
+    False -> incompatible
+    True ->
+      case uri.parse_query(string.drop_start(url, string.length(prefix))) {
+        Ok(params) -> {
           let expect = fn(key, value) {
             list.filter(params, fn(p) { p.0 == key }) == [#(key, value)]
           }
@@ -651,7 +666,7 @@ fn check_authorization_url(
             False -> incompatible
           }
         }
-        _, _ -> incompatible
+        Error(Nil) -> incompatible
       }
   }
 }

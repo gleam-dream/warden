@@ -86,6 +86,11 @@ provider_start(Variant) ->
 
 overrides(standard) -> #{};
 overrides(no_s256) -> #{<<"code_challenge_methods_supported">> => [<<"plain">>]};
+overrides(empty_pkce_methods) -> #{<<"code_challenge_methods_supported">> => []};
+overrides(query_in_authorization_endpoint) ->
+    #{<<"authorization_endpoint">> => fun(V) -> <<V/binary, "?p=b2c_1_signin">> end};
+overrides(insecure_end_session) ->
+    #{<<"end_session_endpoint">> => fun(V) -> binary:replace(V, <<"https:">>, <<"http:">>) end};
 overrides(unadvertised_pkce) -> #{<<"code_challenge_methods_supported">> => delete};
 overrides(requires_par) -> #{<<"require_pushed_authorization_requests">> => true, <<"pushed_authorization_request_endpoint">> => <<"https://localhost:1/par">>};
 overrides(no_end_session) -> #{<<"end_session_endpoint">> => delete};

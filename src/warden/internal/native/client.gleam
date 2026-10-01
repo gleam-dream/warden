@@ -97,9 +97,15 @@ pub fn logout_url(
   state state: Option(String),
 ) -> Result(String, Failure) {
   use metadata <- result.try(metadata(client))
-  case metadata.end_session_endpoint {
+  // The browser carries the ID-token hint there: HTTPS only. Checked at
+  // startup too; metadata may change on reload.
+  let endpoint =
+    metadata.end_session_endpoint
+    |> option.map(fn(endpoint) { #(endpoint, secure_endpoint(endpoint)) })
+  case endpoint {
     None -> Error(protocol.Policy("endpoint_missing"))
-    Some(endpoint) ->
+    Some(#(_, False)) -> Error(protocol.Policy("endpoint_insecure"))
+    Some(#(endpoint, True)) ->
       [
         option.map(id_token_hint, fn(v) { #("id_token_hint", v) }),
         Some(#("client_id", client.client_id)),
@@ -111,6 +117,14 @@ pub fn logout_url(
       |> option.values
       |> with_query(endpoint, _)
       |> Ok
+  }
+}
+
+fn secure_endpoint(endpoint: String) -> Bool {
+  case uri.parse(endpoint) {
+    Ok(uri.Uri(scheme: Some("https"), host: Some(host), fragment: None, ..)) ->
+      host != ""
+    _ -> False
   }
 }
 

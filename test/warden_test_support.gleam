@@ -67,6 +67,9 @@ pub type ProviderVariant {
   Standard
   NoS256
   UnadvertisedPkce
+  EmptyPkceMethods
+  QueryInAuthorizationEndpoint
+  InsecureEndSession
   RequiresPar
   NoEndSession
   WrongIssuer

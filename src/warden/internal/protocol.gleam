@@ -16,7 +16,8 @@ pub type Metadata {
     userinfo_endpoint: Option(String),
     introspection_endpoint: Option(String),
     end_session_endpoint: Option(String),
-    code_challenge_methods: List(String),
+    /// None when the provider omits `code_challenge_methods_supported`.
+    code_challenge_methods: Option(List(String)),
     grant_types: List(String),
     response_modes: List(String),
     auth_methods: List(String),

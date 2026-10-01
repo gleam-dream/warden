@@ -107,7 +107,10 @@ handle(Table, #{path := <<"/.well-known/openid-configuration">>}) ->
         <<"token_endpoint_auth_signing_alg_values_supported">> => [<<"ES256">>, <<"RS256">>, <<"HS256">>],
         <<"authorization_response_iss_parameter_supported">> => true
     },
-    Merged = maps:merge(Base, lookup(Table, metadata_overrides)),
+    %% An override may be a fun applied to the base value.
+    Merged = maps:map(
+        fun(K, F) when is_function(F, 1) -> F(maps:get(K, Base)); (_, V) -> V end,
+        maps:merge(Base, lookup(Table, metadata_overrides))),
     json(200, maps:filter(fun(_, V) -> V =/= delete end, Merged));
 handle(Table, #{path := <<"/jwks">>}) ->
     [{key, Key, Kid}] = ets:lookup(Table, key),

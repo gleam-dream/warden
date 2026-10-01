@@ -254,8 +254,8 @@ fn metadata_decoder() -> decode.Decoder(#(Metadata, String)) {
   use end_session_endpoint <- optional_string("end_session_endpoint")
   use code_challenge_methods <- decode.optional_field(
     "code_challenge_methods_supported",
-    [],
-    strings,
+    None,
+    decode.map(strings, Some),
   )
   use grant_types <- decode.optional_field(
     "grant_types_supported",

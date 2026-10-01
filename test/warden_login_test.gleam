@@ -529,11 +529,37 @@ pub fn unadvertised_pkce_is_accepted_only_by_explicit_policy_test() {
   warden.stop(client)
   support.provider_stop(provider)
 
-  // Advertising methods without S256 is refused under either policy.
-  let provider = support.provider_start(support.NoS256)
-  let assert Ok(assumed) = config.validate(assume(provider))
-  assert warden.start(assumed) |> result_error
-    == Error(warden.ProviderIncompatible([warden.NoS256]))
+  // Advertising methods without S256 is refused under either policy, and
+  // so is an explicit empty list: only an omitted field is "unadvertised".
+  list.each([support.NoS256, support.EmptyPkceMethods], fn(variant) {
+    let provider = support.provider_start(variant)
+    let assert Ok(assumed) = config.validate(assume(provider))
+    assert warden.start(assumed) |> result_error
+      == Error(warden.ProviderIncompatible([warden.NoS256]))
+    support.provider_stop(provider)
+  })
+}
+
+/// An authorization endpoint may carry its own query, as Azure AD B2C's
+/// policy parameter does (review finding J6).
+pub fn authorization_endpoint_query_is_preserved_test() {
+  let provider = support.provider_start(support.QueryInAuthorizationEndpoint)
+  let client = start(settings(provider))
+  let assert Ok(redirect) =
+    warden.begin_login(client, None, warden.default_login())
+  assert param(redirect.url, "p") == "b2c_1_signin"
+  assert string.length(param(redirect.url, "code_challenge")) == 43
+  warden.stop(client)
+  support.provider_stop(provider)
+}
+
+/// The browser is sent to the end-session endpoint with an ID-token hint,
+/// so it must be HTTPS like the authorization endpoint (J11).
+pub fn insecure_end_session_endpoint_is_refused_test() {
+  let provider = support.provider_start(support.InsecureEndSession)
+  let assert Ok(validated) = config.validate(settings(provider))
+  assert warden.start(validated) |> result_error
+    == Error(warden.ProviderIncompatible([warden.InsecureEndSessionEndpoint]))
   support.provider_stop(provider)
 }
 
