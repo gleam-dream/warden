@@ -246,3 +246,13 @@ pub fn rsa_jwk(bits: Int, private: Bool) -> String
 /// The JWK JSON with member `name` set to the JSON value `value_json`.
 @external(erlang, "warden_test_support_ffi", "jwk_with")
 pub fn jwk_with(jwk: String, name: String, value_json: String) -> String
+
+/// Sign `claims_json` with a fresh key of `kind` ("RS256", "Ed25519",
+/// "Ed448"), adding `header_json` members to the protected header.
+/// Returns the compact token and the public key set (JSON).
+@external(erlang, "warden_test_support_ffi", "mint")
+pub fn mint(
+  kind: String,
+  header_json: String,
+  claims_json: String,
+) -> #(String, String)

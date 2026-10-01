@@ -3,6 +3,7 @@
 ////
 //// - RSA keys below 2048 bits are refused (RFC 7518 §3.3); a smaller modulus
 ////   can be factored, which would let anyone forge signatures with it.
+//// - EdDSA keys must be Ed25519.
 //// - A signing key must permit signing: `use`, when present, is `sig`, and
 ////   `key_ops`, when present, includes `sign`.
 
@@ -24,6 +25,15 @@ pub fn strong_enough(fields: Dict(String, Dynamic)) -> Bool {
         Ok(bits) -> bits >= minimum_rsa_bits
         Error(Nil) -> False
       }
+    _ -> True
+  }
+}
+
+/// False for key types Warden does not use for EdDSA: only Ed25519 is
+/// supported (its `at_hash` uses SHA-512; Ed448 would need SHAKE256).
+pub fn supported_curve(fields: Dict(String, Dynamic)) -> Bool {
+  case member(fields, "kty", decode.string) {
+    Ok("OKP") -> member(fields, "crv", decode.string) == Ok("Ed25519")
     _ -> True
   }
 }

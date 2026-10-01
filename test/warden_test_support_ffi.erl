@@ -1,7 +1,7 @@
 %% Test support exposed to Gleam tests.
 -module(warden_test_support_ffi).
 
--export([rsa_jwk/2, jwk_with/3, mailbox_size/0, client_private_jwk/0, adapter_request/2, server_start/2, server_url/2, server_requests/1, server_stop/1, ca_der/0, worker_kill/1, worker_alive/1, atom_count/0, process_count/0, form_login/3, print/1, node_reset/0, node_next/2, node_log/0, keycloak_logout/1, clock_new/1, clock_set/2, clock_read/1, provider_start/1, kill_named/1, ca_pem/0, keycloak_login/3, authorize/2, visit/1, count_reset/0, count/1, handle/4, pki_file/1, spawn_collect/2]).
+-export([mint/3, rsa_jwk/2, jwk_with/3, mailbox_size/0, client_private_jwk/0, adapter_request/2, server_start/2, server_url/2, server_requests/1, server_stop/1, ca_der/0, worker_kill/1, worker_alive/1, atom_count/0, process_count/0, form_login/3, print/1, node_reset/0, node_next/2, node_log/0, keycloak_logout/1, clock_new/1, clock_set/2, clock_read/1, provider_start/1, kill_named/1, ca_pem/0, keycloak_login/3, authorize/2, visit/1, count_reset/0, count/1, handle/4, pki_file/1, spawn_collect/2]).
 
 ca_pem() ->
     Dir = warden_test_server:pki_dir(),
@@ -219,3 +219,26 @@ rsa_jwk(Bits, Private) ->
 %% The JWK JSON with member Name set to the JSON value ValueJson.
 jwk_with(Jwk, Name, ValueJson) ->
     iolist_to_binary(json:encode((json:decode(Jwk))#{Name => json:decode(ValueJson)})).
+
+%% Sign a JWT with a fresh key of the given kind ("RS256", "Ed25519",
+%% "Ed448"); HeaderJson members are added to the protected header and
+%% ClaimsJson is the payload. Returns {Token, JwksJson}.
+mint(<<"Ed448">>, HeaderJson, ClaimsJson) ->
+    %% erlang-jose cannot sign Ed448 here; build the JWS with OTP crypto.
+    {Public, Private} = crypto:generate_key(eddsa, ed448),
+    B64 = fun(Bin) -> base64:encode(Bin, #{mode => urlsafe, padding => false}) end,
+    Header = maps:merge(#{<<"alg">> => <<"EdDSA">>, <<"kid">> => <<"k1">>}, json:decode(HeaderJson)),
+    Input = <<(B64(iolist_to_binary(json:encode(Header))))/binary, ".", (B64(ClaimsJson))/binary>>,
+    Signature = crypto:sign(eddsa, none, Input, [Private, ed448]),
+    Jwk = #{<<"kty">> => <<"OKP">>, <<"crv">> => <<"Ed448">>, <<"x">> => B64(Public), <<"kid">> => <<"k1">>},
+    {<<Input/binary, ".", (B64(Signature))/binary>>, iolist_to_binary(json:encode(#{<<"keys">> => [Jwk]}))};
+mint(Kind, HeaderJson, ClaimsJson) ->
+    {Key, Alg} = case Kind of
+        <<"RS256">> -> {jose_jwk:generate_key({rsa, 2048}), <<"RS256">>};
+        <<"Ed25519">> -> {jose_jwk:generate_key({okp, 'Ed25519'}), <<"EdDSA">>}
+    end,
+    Header = maps:merge(#{<<"alg">> => Alg, <<"kid">> => <<"k1">>}, json:decode(HeaderJson)),
+    Signed = jose_jws:sign(Key, ClaimsJson, Header),
+    {_, Token} = jose_jws:compact(Signed),
+    {_, Public} = jose_jwk:to_public_map(Key),
+    {Token, iolist_to_binary(json:encode(#{<<"keys">> => [Public#{<<"kid">> => <<"k1">>}]}))}.

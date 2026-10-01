@@ -13,6 +13,7 @@
 //// Results use the closed reason codes of `protocol.IdTokenInvalid`.
 
 import gleam/bit_array
+import gleam/bool
 import gleam/crypto
 import gleam/dynamic.{type Dynamic}
 import gleam/dynamic/decode
@@ -66,6 +67,7 @@ pub fn verify_id_token(
     expect,
     Some(expect.issuer),
     Some(expect.client_id),
+    require_exp: True,
   ))
   use claims <- result.try(
     jwt.decode(verified, decode.dynamic)
@@ -75,10 +77,10 @@ pub fn verify_id_token(
     [audience] if audience == expect.client_id -> Ok(Nil)
     _ -> reject("audience_mismatch")
   })
-  use _ <- result.try(case protocol.string_claim(claims, "azp") {
-    None -> Ok(Nil)
-    Some(azp) if azp == expect.client_id -> Ok(Nil)
-    Some(_) -> reject("authorized_party_mismatch")
+  use _ <- result.try(case optional_string(claims, "azp") {
+    Ok(None) -> Ok(Nil)
+    Ok(Some(azp)) if azp == expect.client_id -> Ok(Nil)
+    _ -> reject("authorized_party_mismatch")
   })
   use _ <- result.try(case protocol.string_claim(claims, "sub") {
     Some(sub) if sub != "" -> Ok(Nil)
@@ -101,26 +103,51 @@ pub fn verify_id_token(
       }
   })
   use _ <- result.try(
-    case protocol.string_claim(claims, "at_hash"), expect.access_token {
-      Some(expected), Some(access_token) ->
+    case optional_string(claims, "at_hash"), expect.access_token {
+      Ok(Some(expected)), Some(access_token) ->
         case token_hash(jwt_alg(verified), access_token) == Ok(expected) {
           True -> Ok(Nil)
           False -> reject("access_token_hash")
         }
+      Error(Nil), Some(_) -> reject("access_token_hash")
       _, _ -> Ok(Nil)
     },
   )
   Ok(claims)
 }
 
+/// A claim that may be absent; when present it must be a string. A present
+/// value of another type is an error, never treated as absent.
+fn optional_string(
+  claims: Dynamic,
+  name: String,
+) -> Result(Option(String), Nil) {
+  case decode.run(claims, decode.at([name], decode.dynamic)) {
+    Error(_) -> Ok(None)
+    Ok(_) ->
+      case protocol.string_claim(claims, name) {
+        Some(value) -> Ok(Some(value))
+        None -> Error(Nil)
+      }
+  }
+}
+
 /// Verify a signed userinfo response. `iss` and `aud` are checked when the
-/// token carries them; the subject is checked by the caller.
+/// token carries them; the subject is checked by the caller. Signed
+/// userinfo usually has no `exp`; one that is present is enforced.
 pub fn verify_userinfo(
   token: String,
   keys: JwkSet,
   expect: Expectations,
 ) -> Result(Dynamic, Rejection) {
-  use verified <- result.try(verify_signed(token, keys, expect, None, None))
+  use verified <- result.try(verify_signed(
+    token,
+    keys,
+    expect,
+    None,
+    None,
+    require_exp: False,
+  ))
   use claims <- result.try(
     jwt.decode(verified, decode.dynamic)
     |> result.replace_error(Rejection("malformed", None)),
@@ -145,6 +172,7 @@ fn verify_signed(
   expect: Expectations,
   issuer: Option(String),
   audience: Option(String),
+  require_exp require_exp: Bool,
 ) -> Result(jwt.Jwt(jwt.Verified), Rejection) {
   use header <- result.try(protected_header(token))
   use _ <- result.try(case header.alg {
@@ -165,7 +193,7 @@ fn verify_signed(
       issuer:,
       audience:,
       clock_skew: 0,
-      require_exp: True,
+      require_exp:,
     )
   let compatible =
     key_set.to_list(keys)
@@ -225,6 +253,10 @@ fn protected_header(token: String) -> Result(Header, Rejection) {
       |> result.try(bit_array.to_string)
       |> result.try(fn(text) {
         json.parse(text, {
+          // Warden understands no critical header extensions, so any `crit`
+          // member, even `null`, is refused (RFC 7515 §4.1.11).
+          use crit <- decode.optional_field("crit", False, decode.success(True))
+          use <- bool.guard(crit, decode.failure(Header("", None), "crit"))
           use alg <- decode.field("alg", decode.string)
           use kid <- decode.optional_field(
             "kid",

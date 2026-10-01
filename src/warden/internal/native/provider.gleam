@@ -201,6 +201,7 @@ pub fn parse_key_set(text: String) -> Result(JwkSet, Nil) {
   )
   keys
   |> list.filter(key_policy.strong_enough)
+  |> list.filter(key_policy.supported_curve)
   |> list.filter_map(fn(fields) {
     fields
     |> dict.drop(["x5c", "x5t", "x5t#S256", "x5u"])
