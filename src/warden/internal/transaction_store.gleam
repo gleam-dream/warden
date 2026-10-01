@@ -19,10 +19,10 @@
 
 import gleam/dict.{type Dict}
 import gleam/erlang/process.{type Subject}
-import gleam/list
 import gleam/option.{type Option}
 import gleam/otp/actor
 import warden/internal/call.{type CallError}
+import warden/internal/fifo.{type Fifo}
 
 /// Immutable material for one login. Secret-bearing; it never leaves Warden.
 pub type Material {
@@ -87,23 +87,6 @@ type State {
   )
 }
 
-/// A first-in, first-out queue with amortised constant-time operations.
-type Fifo(a) {
-  Fifo(front: List(a), back: List(a))
-}
-
-fn push(queue: Fifo(a), item: a) -> Fifo(a) {
-  Fifo(..queue, back: [item, ..queue.back])
-}
-
-fn peek(queue: Fifo(a)) -> Result(#(a, Fifo(a)), Nil) {
-  case queue {
-    Fifo(front: [first, ..rest], back:) -> Ok(#(first, Fifo(rest, back)))
-    Fifo(front: [], back: []) -> Error(Nil)
-    Fifo(front: [], back:) -> peek(Fifo(list.reverse(back), []))
-  }
-}
-
 pub type Store {
   Store(subject: Subject(Message), timeout: Int)
 }
@@ -122,8 +105,8 @@ pub fn start(
     next_revision: 1,
     pending: 0,
     terminal: 0,
-    expiry: Fifo([], []),
-    graves: Fifo([], []),
+    expiry: fifo.new(),
+    graves: fifo.new(),
   ))
   |> actor.named(name)
   |> actor.on_message(handle)
@@ -156,7 +139,11 @@ fn handle(state: State, message: Message) -> actor.Next(State, Message) {
               next_revision: revision + 1,
               pending:,
               terminal:,
-              expiry: push(state.expiry, #(material.expires_at, key, revision)),
+              expiry: fifo.push(state.expiry, #(
+                material.expires_at,
+                key,
+                revision,
+              )),
             ),
           )
         }
@@ -221,7 +208,7 @@ fn retire(state: State, key: String, record: Record, now: Int) -> State {
     records: dict.insert(state.records, key, record),
     pending: state.pending - 1,
     terminal: state.terminal + 1,
-    graves: push(state.graves, #(now, key)),
+    graves: fifo.push(state.graves, #(now, key)),
   )
 }
 
@@ -232,7 +219,7 @@ fn maintain(state: State) -> State {
 }
 
 fn expire(state: State, now: Int) -> State {
-  case peek(state.expiry) {
+  case fifo.pop(state.expiry) {
     Ok(#(#(expires_at, key, revision), rest)) if expires_at <= now -> {
       let state = State(..state, expiry: rest)
       case dict.get(state.records, key) {
@@ -250,7 +237,7 @@ fn expire(state: State, now: Int) -> State {
 /// Drop terminal records past retention, and the oldest beyond the terminal
 /// budget (`capacity`).
 fn prune(state: State, now: Int) -> State {
-  case peek(state.graves) {
+  case fifo.pop(state.graves) {
     Ok(#(#(at, key), rest))
       if now - at > state.retention || state.terminal > state.capacity
     -> {

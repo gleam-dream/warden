@@ -1192,6 +1192,12 @@ pub type CustodyRecoveryError {
   RecoveryOwnerMismatch
   /// The custody owner returned a receipt for another command.
   ContradictoryReceipt
+  /// The session this command installed has since ended (logged out); the
+  /// recovery cannot bring it back.
+  RecoveryEnded
+  /// The command is older than the custody owner's retained history; it is
+  /// neither confirmed nor installed again. Start a new login.
+  RecoveryExpired
 }
 
 fn install(
@@ -1212,6 +1218,7 @@ fn install(
   let command =
     custody.Install(
       command_id: secure.random_token(24),
+      issued_at: client.clock(),
       provider: client.provider,
       identity:,
       evidence: custody.Evidence(
@@ -1236,7 +1243,7 @@ fn submit_install(
   let command = redacted.reveal(recovery.command)
   case custody.install(client.custody, command) {
     Error(_) -> Ok(CustodyStillUncertain(recovery))
-    Ok(receipt) if receipt.command_id == command.command_id ->
+    Ok(custody.Installed(receipt)) if receipt.command_id == command.command_id ->
       Ok(
         CustodyRecovered(Session(
           identity: command.identity,
@@ -1245,7 +1252,9 @@ fn submit_install(
           provider: client.provider,
         )),
       )
-    Ok(_) -> Error(ContradictoryReceipt)
+    Ok(custody.Installed(_)) -> Error(ContradictoryReceipt)
+    Ok(custody.InstallEnded) -> Error(RecoveryEnded)
+    Ok(custody.InstallExpired) -> Error(RecoveryExpired)
   }
 }
 

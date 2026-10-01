@@ -419,6 +419,14 @@ pub fn lost_custody_acknowledgement_recovers_without_exchange_test() {
   assert warden.session_reference(session) == warden.session_reference(again)
   assert warden.session_revision(session) == 1
   assert support.token_requests(provider) == 1
+  // After logout the recovery cannot resurrect the session (finding F5).
+  let assert Ok(_) =
+    warden.logout(
+      client,
+      session,
+      warden.LogoutOptions(post_logout_redirect_uri: None, state: None),
+    )
+  assert warden.recover_custody(client, recovery) == Error(warden.RecoveryEnded)
   // A different client configuration cannot use the recovery.
   let other_provider = support.provider_start(support.Standard)
   let other = start(settings(other_provider))

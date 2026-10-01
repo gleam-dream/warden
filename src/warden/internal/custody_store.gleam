@@ -21,6 +21,7 @@ import gleam/list
 import gleam/option.{type Option, None, Some}
 import gleam/otp/actor
 import warden/internal/call.{type CallError}
+import warden/internal/fifo.{type Fifo}
 
 pub type Tokens {
   Tokens(
@@ -40,6 +41,9 @@ pub type Evidence {
 pub type Install(identity) {
   Install(
     command_id: String,
+    /// When the command was created (Warden's clock, seconds). Replays of
+    /// commands at or before the history horizon are refused.
+    issued_at: Int,
     provider: String,
     identity: identity,
     evidence: Evidence,
@@ -49,6 +53,16 @@ pub type Install(identity) {
 
 pub type Receipt {
   Receipt(command_id: String, reference: String, revision: Int)
+}
+
+pub type InstallReply {
+  /// Installed now, or the receipt of an earlier identical installation.
+  Installed(Receipt)
+  /// The command was installed and its session has since been removed.
+  InstallEnded
+  /// The command is older than the retained history; it is neither
+  /// confirmed nor installed again.
+  InstallExpired
 }
 
 pub type Snapshot(identity) {
@@ -146,7 +160,7 @@ type Entry(identity) {
 }
 
 pub opaque type Message(identity) {
-  InstallMsg(Install(identity), Subject(Receipt))
+  InstallMsg(Install(identity), Subject(InstallReply))
   GetMsg(String, Subject(Result(Snapshot(identity), Nil)))
   ReserveMsg(
     reference: String,
@@ -170,6 +184,11 @@ type State(identity) {
   State(
     entries: Dict(String, Entry(identity)),
     installs: Dict(String, Receipt),
+    /// Installed commands, oldest first: #(issued_at, command_id).
+    install_order: Fifo(#(Int, String)),
+    /// The latest `issued_at` evicted from `installs`; replays at or before
+    /// it cannot be told apart from new commands and are refused.
+    horizon: Option(Int),
     publications: Dict(String, Receipt),
     new_reference: fn() -> String,
     next_dispatch: Int,
@@ -198,6 +217,8 @@ pub fn start(
     State(
       entries: dict.new(),
       installs: dict.new(),
+      install_order: fifo.new(),
+      horizon: None,
       publications: dict.new(),
       new_reference:,
       next_dispatch: 1,
@@ -229,12 +250,24 @@ fn handle(
 ) -> actor.Next(State(identity), Message(identity)) {
   case message {
     InstallMsg(command, subject) ->
-      case dict.get(state.installs, command.command_id) {
-        Ok(receipt) -> {
-          reply(state, DelayInstall, subject, receipt)
+      case
+        dict.get(state.installs, command.command_id),
+        is_before_horizon(state.horizon, command.issued_at)
+      {
+        // A replay: the same receipt while the session lives.
+        Ok(receipt), _ -> {
+          let outcome = case dict.has_key(state.entries, receipt.reference) {
+            True -> Installed(receipt)
+            False -> InstallEnded
+          }
+          reply(state, DelayInstall, subject, outcome)
           actor.continue(state)
         }
-        Error(Nil) -> {
+        Error(Nil), True -> {
+          reply(state, DelayInstall, subject, InstallExpired)
+          actor.continue(state)
+        }
+        Error(Nil), False -> {
           let reference = state.new_reference()
           let receipt = Receipt(command.command_id, reference, 1)
           let entry =
@@ -250,14 +283,14 @@ fn handle(
             State(
               ..state,
               entries: dict.insert(state.entries, reference, entry),
-              installs: bounded_insert(
-                state.installs,
+              installs: dict.insert(state.installs, command.command_id, receipt),
+              install_order: fifo.push(state.install_order, #(
+                command.issued_at,
                 command.command_id,
-                receipt,
-                state.history_limit,
-              ),
+              )),
             )
-          reply(state, DelayInstall, subject, receipt)
+            |> evict_installs
+          reply(state, DelayInstall, subject, Installed(receipt))
           actor.continue(state)
         }
       }
@@ -434,6 +467,37 @@ fn publish(
 /// Command history is bounded; beyond the limit an arbitrary half is
 /// dropped. A dropped command can no longer be recovered by replay, which
 /// surfaces as a typed mismatch rather than a second installation.
+fn is_before_horizon(horizon: Option(Int), issued_at: Int) -> Bool {
+  case horizon {
+    Some(horizon) -> issued_at <= horizon
+    None -> False
+  }
+}
+
+/// Keep at most `history_limit` install receipts, evicting the oldest and
+/// advancing the horizon past them.
+fn evict_installs(state: State(identity)) -> State(identity) {
+  case fifo.size(state.install_order) > state.history_limit {
+    False -> state
+    True ->
+      case fifo.pop(state.install_order) {
+        Error(Nil) -> state
+        Ok(#(#(issued_at, command_id), rest)) ->
+          evict_installs(
+            State(
+              ..state,
+              installs: dict.delete(state.installs, command_id),
+              install_order: rest,
+              horizon: Some(case state.horizon {
+                Some(horizon) -> int.max(horizon, issued_at)
+                None -> issued_at
+              }),
+            ),
+          )
+      }
+  }
+}
+
 fn bounded_insert(
   history: Dict(String, Receipt),
   key: String,
@@ -457,7 +521,7 @@ fn bounded_insert(
 pub fn install(
   store: Store(identity),
   command: Install(identity),
-) -> Result(Receipt, CallError) {
+) -> Result(InstallReply, CallError) {
   call.call(store.subject, store.timeout, InstallMsg(command, _))
 }
 
