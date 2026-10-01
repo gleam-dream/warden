@@ -457,6 +457,31 @@ pub fn max_age_requires_recent_authentication_test() {
   support.provider_stop(provider)
 }
 
+/// An `auth_time` in the future is not a recent authentication (J9).
+pub fn future_authentication_time_fails_max_age_test() {
+  let provider = support.provider_start(support.Standard)
+  support.set_int_claims(
+    provider,
+    dict.from_list([#("auth_time", support.now_seconds() + 3600)]),
+  )
+  let client = start(settings(provider))
+  let assert Ok(redirect) =
+    warden.begin_login(
+      client,
+      None,
+      warden.LoginOptions(..warden.default_login(), max_age: Some(300)),
+    )
+  let query = authorize(provider, redirect, "future-code")
+  let assert Error(warden.IdentityRejected(warden.AuthenticationTooOld)) =
+    warden.complete_login(
+      client,
+      warden.QueryCallback(query),
+      Some(redirect.browser_binding),
+    )
+  warden.stop(client)
+  support.provider_stop(provider)
+}
+
 pub fn login_options_are_validated_test() {
   let provider = support.provider_start(support.Standard)
   let client = start(settings(provider))

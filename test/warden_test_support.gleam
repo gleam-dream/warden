@@ -111,6 +111,10 @@ pub type Behaviour {
   OmitIdToken
   DropRefreshToken
   Sub(String)
+  /// Replace a string member of the token response.
+  TokenField(String, String)
+  /// Replace an integer member of the token response.
+  TokenIntField(String, Int)
 }
 
 @external(erlang, "warden_test_provider", "script")
@@ -259,3 +263,7 @@ pub fn mint(
   header_json: String,
   claims_json: String,
 ) -> #(String, String)
+
+/// Extra or replacement integer ID-token claims for every issued ID token.
+@external(erlang, "warden_test_provider", "set_claims")
+pub fn set_int_claims(provider: Provider, claims: Dict(String, Int)) -> Nil

@@ -374,11 +374,31 @@ type RawToken {
 
 fn raw_token_decoder() -> decode.Decoder(RawToken) {
   let opt_string = decode.optional(decode.string)
+  // A lifetime is a non-negative integer (some providers send a string).
   let expires =
-    decode.one_of(decode.map(decode.int, Some), [
-      decode.map(decode.string, fn(s) { option.from_result(int.parse(s)) }),
-      decode.success(None),
+    decode.one_of(decode.int, [
+      decode.then(decode.string, fn(s) {
+        case int.parse(s) {
+          Ok(n) -> decode.success(n)
+          Error(Nil) -> decode.failure(0, "expires_in")
+        }
+      }),
     ])
+    |> decode.then(fn(n) {
+      case n >= 0 {
+        True -> decode.success(Some(n))
+        False -> decode.failure(None, "expires_in")
+      }
+    })
+  // Warden sends access tokens as Bearer tokens only (RFC 6750); a
+  // sender-constrained type such as DPoP would be misused.
+  let bearer =
+    decode.then(decode.string, fn(t) {
+      case string.lowercase(t) {
+        "bearer" -> decode.success("Bearer")
+        _ -> decode.failure("Bearer", "token_type")
+      }
+    })
   let scope =
     decode.one_of(
       decode.map(decode.string, fn(s) {
@@ -387,7 +407,7 @@ fn raw_token_decoder() -> decode.Decoder(RawToken) {
       [decode.list(decode.string)],
     )
   use access_token <- decode.optional_field("access_token", None, opt_string)
-  use token_type <- decode.optional_field("token_type", "Bearer", decode.string)
+  use token_type <- decode.optional_field("token_type", "Bearer", bearer)
   use expires_in <- decode.optional_field("expires_in", None, expires)
   use refresh_token <- decode.optional_field("refresh_token", None, opt_string)
   use id_token <- decode.optional_field("id_token", None, opt_string)

@@ -791,7 +791,8 @@ pub type IdentityProblem {
   AccessTokenHashMismatch
   MissingClaim(String)
   SubjectMismatch
-  /// `max_age` was requested and `auth_time` is absent or too old.
+  /// `max_age` was requested and `auth_time` is absent, in the future, or
+  /// too old.
   AuthenticationTooOld
   MalformedIdToken
   UnclassifiedIdentityFailure
@@ -1052,12 +1053,15 @@ fn accept_identity(
     None -> Ok(Nil)
     Some(max_age) ->
       case protocol.int_claim(claims, "auth_time") {
-        Some(auth_time) if auth_time + max_age >= 0 ->
-          case client.clock() - auth_time <= max_age {
+        Some(auth_time) -> {
+          let age = client.clock() - auth_time
+          // A future authentication time is not a recent authentication.
+          case age >= 0 && age <= max_age {
             True -> Ok(Nil)
             False -> Error(AuthenticationTooOld)
           }
-        _ -> Error(AuthenticationTooOld)
+        }
+        None -> Error(AuthenticationTooOld)
       }
   })
   use _ <- result.try(case response.access_token {
@@ -1446,8 +1450,10 @@ pub opaque type RefreshPublicationRecovery {
 }
 
 /// Refresh the session's access material. At most one refresh per session
-/// generation is outstanding; a possibly transmitted refresh token is never
-/// sent again.
+/// generation is outstanding. A refresh token is sent again only after
+/// proof it was not sent, or after a rejection that RFC 6749 §5.2 defines
+/// as preceding grant processing (`invalid_request`, `invalid_client`,
+/// `unauthorized_client`, `unsupported_grant_type`, `invalid_scope`).
 pub fn refresh_session(
   client: Client,
   session: Session,
@@ -1523,13 +1529,24 @@ fn dispatch_refresh(
                 custody.SettleRejected,
                 RefreshRejectedByEndpoint(InvalidGrant),
               )
-            NoOAuthError ->
-              settle(
-                custody.SettleQuarantine,
-                RefreshProviderQuarantined(recovery),
-              )
-            other ->
-              settle(custody.SettleNotSent, RefreshRejectedByEndpoint(other))
+            code ->
+              case code {
+                // These codes say the request was refused before the grant
+                // was processed (RFC 6749 §5.2): release the generation.
+                InvalidRequest
+                | InvalidClient
+                | UnauthorizedClient
+                | UnsupportedGrantType
+                | InvalidScope ->
+                  settle(custody.SettleNotSent, RefreshRejectedByEndpoint(code))
+                // Anything else may follow processing: never send the
+                // token again.
+                _ ->
+                  settle(
+                    custody.SettleQuarantine,
+                    RefreshProviderQuarantined(recovery),
+                  )
+              }
           }
         protocol.IdTokenInvalid(reason:, claim:) ->
           settle(

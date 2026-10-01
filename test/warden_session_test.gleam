@@ -136,6 +136,13 @@ pub fn uncertain_and_invalid_refresh_outcomes_quarantine_test() {
     #(support.Status(503, "temporarily_unavailable"), "provider"),
     #(support.Close, "provider"),
     #(support.MalformedJson, "RefreshResponseMalformed"),
+    // Tokens Warden cannot use as Bearer tokens, or a negative lifetime
+    // (review finding J12).
+    #(support.TokenField("token_type", "DPoP"), "RefreshResponseMalformed"),
+    #(support.TokenIntField("expires_in", -5), "RefreshResponseMalformed"),
+    // An error code Warden does not recognise may follow processing of the
+    // grant; the token it sent is never sent again (F6).
+    #(support.Status(400, "unrecognised_error"), "provider"),
     #(support.IdToken("changed_sub"), "RefreshedSubjectMismatch"),
     #(support.IdToken("changed_nonce"), "RefreshedNonceMismatch"),
     #(
@@ -163,6 +170,11 @@ pub fn definite_rejection_revokes_or_releases_test() {
   let #(first, second) = refresh_with(support.Status(401, "invalid_client"))
   assert first == warden.RefreshRejectedByEndpoint(warden.InvalidClient)
   let assert Ok(warden.RefreshCompleted(_)) = second
+}
+
+pub fn bearer_token_type_is_case_insensitive_test() {
+  let #(first, _) = refresh_with(support.TokenField("token_type", "bearer"))
+  let assert warden.RefreshCompleted(_) = first
 }
 
 pub fn proven_no_send_releases_the_generation_test() {
