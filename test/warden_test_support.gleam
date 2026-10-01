@@ -189,6 +189,10 @@ pub type Canned {
   ManyHeaders
   BigHeaderLine
   HeaderOvershoot
+  BareLfHead
+  SignedContentLength
+  ControlInHeader
+  SignedChunkSize
   Gzip
   ErrorBody
   HtmlError

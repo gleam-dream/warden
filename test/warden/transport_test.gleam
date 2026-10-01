@@ -313,3 +313,29 @@ pub fn large_request_bodies_are_refused_before_send_test() {
   support.sleep(50)
   assert support.server_requests(s) == 0
 }
+
+/// Response framing is strict: CRLF only, no control characters in the
+/// head, digits only in lengths (review finding T7).
+pub fn lenient_framing_is_refused_test() {
+  list.each(
+    [
+      support.BareLfHead,
+      support.SignedContentLength,
+      support.ControlInHeader,
+      support.SignedChunkSize,
+    ],
+    fn(kind) {
+      use s <- with_server("localhost", kind)
+      assert #(kind, get(policy(), support.server_url(s, "/x")))
+        == #(kind, Error(Failure(Sent, transport.MalformedResponse)))
+    },
+  )
+}
+
+/// IPv6 literals are bracketed in the Host header on every port (T6).
+pub fn host_header_brackets_ipv6_literals_test() {
+  assert transport.authority("::1", 443) == "[::1]"
+  assert transport.authority("::1", 8443) == "[::1]:8443"
+  assert transport.authority("idp.example", 443) == "idp.example"
+  assert transport.authority("idp.example", 8443) == "idp.example:8443"
+}

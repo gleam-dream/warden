@@ -240,6 +240,14 @@ fn host_allowed(host: String, allowed: Option(List(String))) -> Bool {
   }
 }
 
+/// The Host header value for a host and port.
+pub fn authority(host: String, port: Int) -> String {
+  case port {
+    443 -> bracket(host)
+    port -> bracket(host) <> ":" <> int.to_string(port)
+  }
+}
+
 fn encode_request(
   request: Request,
   target: Target,
@@ -248,10 +256,7 @@ fn encode_request(
     Get -> "GET"
     Post -> "POST"
   }
-  let host_header = case target.port {
-    443 -> target.host
-    port -> bracket(target.host) <> ":" <> int.to_string(port)
-  }
+  let host_header = authority(target.host, target.port)
   use headers <- result.try(
     request.headers
     |> list.filter(fn(h) {
@@ -661,7 +666,14 @@ fn parse_head(
     bit_array.to_string(head)
     |> result.replace_error(Failure(Sent, MalformedResponse)),
   )
-  case string.split(text, "\r\n") {
+  // Lines end in CRLF only; no other control character (HTAB aside) may
+  // appear, so a bare LF cannot hide a header inside the status line.
+  let lines = string.split(text, "\r\n")
+  use <- bool.guard(
+    !list.all(lines, fn(line) { no_controls(bit_array.from_string(line)) }),
+    sent(MalformedResponse),
+  )
+  case lines {
     [status_line, ..lines] -> {
       use status <- result.try(parse_status(status_line))
       use <- bool.guard(
@@ -673,6 +685,36 @@ fn parse_head(
     }
     [] -> sent(MalformedResponse)
   }
+}
+
+fn no_controls(bytes: BitArray) -> Bool {
+  case bytes {
+    <<>> -> True
+    <<0x09, rest:bytes>> -> no_controls(rest)
+    <<b, _:bytes>> if b < 0x20 || b == 0x7F -> False
+    <<_, rest:bytes>> -> no_controls(rest)
+    _ -> False
+  }
+}
+
+fn all_digits(text: String, digit: fn(Int) -> Bool) -> Bool {
+  text != "" && all_bytes(bit_array.from_string(text), digit)
+}
+
+fn all_bytes(bytes: BitArray, check: fn(Int) -> Bool) -> Bool {
+  case bytes {
+    <<>> -> True
+    <<b, rest:bytes>> -> check(b) && all_bytes(rest, check)
+    _ -> False
+  }
+}
+
+fn decimal(b: Int) -> Bool {
+  b >= 0x30 && b <= 0x39
+}
+
+fn hexadecimal(b: Int) -> Bool {
+  decimal(b) || { b >= 0x41 && b <= 0x46 } || { b >= 0x61 && b <= 0x66 }
 }
 
 fn parse_status(line: String) -> Result(Int, Failure) {
@@ -731,7 +773,16 @@ fn read_body(
   case values("transfer-encoding"), values("content-length") {
     [], [] -> read_until_close(socket, policy.max_body, deadline, rest)
     [], lengths ->
-      case lengths |> list.map(int.parse) |> list.unique {
+      case
+        lengths
+        |> list.map(fn(length) {
+          case all_digits(length, decimal) {
+            True -> int.parse(length)
+            False -> Error(Nil)
+          }
+        })
+        |> list.unique
+      {
         [Ok(length)] if length > policy.max_body -> sent(BodyTooLarge)
         [Ok(length)] if length >= 0 -> read_exact(socket, length, deadline, rest)
         _ -> sent(MalformedResponse)
@@ -868,10 +919,9 @@ fn chunk_size(line: BitArray) -> Result(Int, Nil) {
     Ok(#(hex, _extensions)) -> hex
     Error(Nil) -> text
   }
-  let hex = string.trim(hex)
-  case string.length(hex) {
-    n if n > 0 && n <= 8 -> int.base_parse(hex, 16)
-    _ -> Error(Nil)
+  case string.length(hex) <= 8 && all_digits(hex, hexadecimal) {
+    True -> int.base_parse(hex, 16)
+    False -> Error(Nil)
   }
 }
 
