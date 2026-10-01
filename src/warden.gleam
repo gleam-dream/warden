@@ -62,6 +62,8 @@ pub opaque type Client {
     provider: String,
     supervisor: Pid,
     clock: fn() -> Int,
+    /// Elapsed time for pending-login and session lifetimes.
+    monotonic: fn() -> Int,
     provider_name: Dynamic,
   )
 }
@@ -155,7 +157,11 @@ pub type OAuthError {
 /// the validated configuration, and start the supervised processes. The
 /// supervisor is linked to the caller.
 pub fn start(config: Config) -> Result(Client, StartError) {
-  start_with_clock(config, secure.now_seconds)
+  start_with_clocks(
+    config,
+    wall: secure.now_seconds,
+    monotonic: secure.monotonic_seconds,
+  )
 }
 
 /// A child specification for an application supervision tree.
@@ -178,10 +184,23 @@ type ExitReason {
   Shutdown
 }
 
+/// Test support: one injected clock drives both wall and elapsed time.
 @internal
 pub fn start_with_clock(
   config: Config,
   clock: fn() -> Int,
+) -> Result(Client, StartError) {
+  start_with_clocks(config, wall: clock, monotonic: clock)
+}
+
+/// `wall` is Unix time for token validation and token expiry; `monotonic`
+/// measures pending-login and session lifetimes, unaffected by wall-clock
+/// steps. Both in seconds.
+@internal
+pub fn start_with_clocks(
+  config: Config,
+  wall clock: fn() -> Int,
+  monotonic monotonic: fn() -> Int,
 ) -> Result(Client, StartError) {
   use _ <- result.try(case secure.ensure_applications() {
     True -> Ok(Nil)
@@ -212,6 +231,7 @@ pub fn start_with_clock(
   start_supervised(
     config,
     clock,
+    monotonic,
     supervision.worker(fn() {
       provider.start(provider_name, issuer, policy, Some(discovered))
       |> result.map(fn(started) { actor.Started(..started, data: Nil) })
@@ -224,6 +244,7 @@ pub fn start_with_clock(
 fn start_supervised(
   config: Config,
   clock: fn() -> Int,
+  monotonic: fn() -> Int,
   provider_child: supervision.ChildSpecification(Nil),
   backend: native.Client,
   provider_name: Dynamic,
@@ -238,7 +259,7 @@ fn start_supervised(
     |> supervisor.add(
       supervision.worker(fn() {
         transactions.start(
-          clock:,
+          clock: monotonic,
           capacity: config.max_pending_logins(config),
           retention: lifetime,
           name: transaction_name,
@@ -270,6 +291,7 @@ fn start_supervised(
         provider: provider_binding(config),
         supervisor: supervisor_pid,
         clock:,
+        monotonic:,
         provider_name:,
       ))
     }
@@ -534,7 +556,7 @@ pub fn begin_login(
     redirect_uri:,
     client_id: config.client_id(client.config),
   ))
-  let now = client.clock()
+  let now = client.monotonic()
   let material =
     transactions.Material(
       state:,
@@ -1218,7 +1240,7 @@ fn install(
   let command =
     custody.Install(
       command_id: secure.random_token(24),
-      issued_at: client.clock(),
+      issued_at: client.monotonic(),
       provider: client.provider,
       identity:,
       evidence: custody.Evidence(

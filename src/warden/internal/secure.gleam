@@ -55,3 +55,12 @@ pub fn ensure_applications() -> Bool {
 
 @external(erlang, "application", "ensure_all_started")
 fn ensure_all_started(applications: List(atom.Atom)) -> Dynamic
+
+/// Monotonic seconds: for measuring lifetimes, never compared with Unix
+/// time.
+pub fn monotonic_seconds() -> Int {
+  monotonic_time(atom.create("second"))
+}
+
+@external(erlang, "erlang", "monotonic_time")
+fn monotonic_time(unit: atom.Atom) -> Int

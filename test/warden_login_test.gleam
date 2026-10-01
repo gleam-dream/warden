@@ -490,6 +490,33 @@ pub fn future_authentication_time_fails_max_age_test() {
   support.provider_stop(provider)
 }
 
+/// Pending-login lifetimes run on the monotonic clock, so a wall-clock step
+/// (NTP) neither extends nor cuts them short (review finding F9).
+pub fn login_lifetime_follows_the_monotonic_clock_test() {
+  let provider = support.provider_start(support.Standard)
+  let monotonic = support.clock_new(1000)
+  let assert Ok(validated) = config.validate(settings(provider))
+  let assert Ok(client) =
+    warden.start_with_clocks(
+      validated,
+      wall: support.now_seconds,
+      monotonic: fn() { support.clock_read(monotonic) },
+    )
+  let assert Ok(redirect) =
+    warden.begin_login(client, None, warden.default_login())
+  let query = authorize(provider, redirect, "monotonic-code")
+  // Ten minutes pass on the monotonic clock; the wall clock does not move.
+  support.clock_set(monotonic, 1000 + 601)
+  assert warden.complete_login(
+      client,
+      warden.QueryCallback(query),
+      Some(redirect.browser_binding),
+    )
+    == Error(warden.LoginExpired)
+  warden.stop(client)
+  support.provider_stop(provider)
+}
+
 pub fn login_options_are_validated_test() {
   let provider = support.provider_start(support.Standard)
   let client = start(settings(provider))
