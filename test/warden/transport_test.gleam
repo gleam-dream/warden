@@ -233,6 +233,18 @@ pub fn classify_address_test() {
     #(Ipv6(0xFE80, 0, 0, 0, 0, 0, 0, 1), transport.Reserved),
     #(Ipv6(0x2606, 0x4700, 0, 0, 0, 0, 0, 1), transport.Public),
     #(Ipv6(0x64, 0xFF9B, 0, 0, 0, 0, 0x0A00, 1), transport.Private),
+    // Cloud metadata services inside ranges `allow_private` admits stay
+    // reserved, like 169.254.169.254 (review finding T2).
+    #(Ipv6(0xFD00, 0xEC2, 0, 0, 0, 0, 0, 0x254), transport.Reserved),
+    #(Ipv4(100, 100, 100, 200), transport.Reserved),
+    // IPv6 special-purpose ranges that are not public unicast (T8):
+    // Teredo, benchmarking, ORCHID v1/v2, documentation 3fff::/20.
+    #(Ipv6(0x2001, 0, 0x4136, 0xE378, 0, 0, 0, 1), transport.Reserved),
+    #(Ipv6(0x2001, 2, 0, 0, 0, 0, 0, 1), transport.Reserved),
+    #(Ipv6(0x2001, 0x10, 0, 0, 0, 0, 0, 1), transport.Reserved),
+    #(Ipv6(0x2001, 0x2F, 0, 0, 0, 0, 0, 1), transport.Reserved),
+    #(Ipv6(0x3FFF, 0x0FFF, 0, 0, 0, 0, 0, 1), transport.Reserved),
+    #(Ipv6(0x3FFF, 0x1000, 0, 0, 0, 0, 0, 1), transport.Public),
   ]
   list.each(cases, fn(c) {
     assert #(c.0, transport.classify(c.0)) == #(c.0, c.1)
@@ -278,4 +290,26 @@ fn status_body() -> decode.Decoder(#(Int, BitArray)) {
   use status <- decode.field(0, decode.int)
   use body <- decode.field(1, decode.bit_array)
   decode.success(#(status, body))
+}
+
+/// The header limit holds for the whole head, including the last read
+/// (review finding T4).
+pub fn header_limit_covers_the_final_read_test() {
+  use s <- with_server("localhost", support.HeaderOvershoot)
+  assert get(policy(), support.server_url(s, "/x"))
+    == Error(Failure(Sent, transport.HeadersTooLarge))
+}
+
+/// Request bodies are small form posts; a large one is refused before
+/// connecting, so a peer that stops reading cannot stall the send (T3).
+pub fn large_request_bodies_are_refused_before_send_test() {
+  use s <- with_server("localhost", support.OkJson)
+  let body = Some(<<string.repeat("a", transport.max_request_body + 1):utf8>>)
+  assert transport.send(
+      policy(),
+      transport.Request(transport.Post, support.server_url(s, "/x"), [], body),
+    )
+    == Error(Failure(NotSent, transport.InvalidRequest))
+  support.sleep(50)
+  assert support.server_requests(s) == 0
 }

@@ -188,6 +188,7 @@ canned(interim) -> fun(_) -> {raw, <<"HTTP/1.1 100 Continue\r\n\r\nHTTP/1.1 200 
 canned(slow) -> fun(_) -> {delay, 3000, json_ok()} end;
 canned(many_headers) -> fun(_) -> {raw, [<<"HTTP/1.1 200 OK\r\n">>, [[<<"x-h">>, integer_to_list(N), <<": v\r\n">>] || N <- lists:seq(1, 200)], <<"content-length: 0\r\n\r\n">>]} end;
 canned(big_header_line) -> fun(_) -> {raw, [<<"HTTP/1.1 200 OK\r\nx-big: ">>, binary:copy(<<"z">>, 40000), <<"\r\ncontent-length: 0\r\n\r\n">>]} end;
+canned(header_overshoot) -> fun(_) -> {raw, [<<"HTTP/1.1 200 OK\r\nx-a: ">>, binary:copy(<<"a">>, 16000), <<"\r\nx-b: ">>, binary:copy(<<"b">>, 9000), <<"\r\ncontent-length: 0\r\n\r\n">>]} end;
 canned(gzip) -> fun(_) -> {respond, 200, [{<<"content-encoding">>, <<"gzip">>}], <<"xx">>} end;
 canned(error_body) -> fun(_) -> {respond, 400, [{<<"content-type">>, <<"application/json">>}], <<"{\"error\":\"invalid_grant\",\"error_description\":\"SECRET-TEXT\"}">>} end;
 canned(html_error) -> fun(_) -> {respond, 500, [{<<"content-type">>, <<"text/html">>}], <<"<html>SECRET</html>">>} end;

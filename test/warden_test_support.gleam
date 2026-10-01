@@ -188,6 +188,7 @@ pub type Canned {
   Slow
   ManyHeaders
   BigHeaderLine
+  HeaderOvershoot
   Gzip
   ErrorBody
   HtmlError

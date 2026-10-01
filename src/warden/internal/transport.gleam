@@ -136,6 +136,11 @@ pub type AddressClass {
 // ---------------------------------------------------------------------------
 // Entry point
 
+/// Largest request body Warden sends. Its requests are small form posts;
+/// a bound keeps the send within the deadline, since TLS sends do not time
+/// out on their own.
+pub const max_request_body = 65_536
+
 pub fn send(policy: Policy, request: Request) -> Result(Response, Failure) {
   let start = monotonic_ms()
   let deadline = start + policy.timeout_ms
@@ -161,6 +166,13 @@ fn run(
   use <- bool.guard(
     !host_allowed(target.host, policy.allowed_hosts),
     not_sent(DestinationRejected),
+  )
+  use <- bool.guard(
+    case request.body {
+      Some(body) -> bit_array.byte_size(body) > max_request_body
+      None -> False
+    },
+    not_sent(InvalidRequest),
   )
   use address <- result.try(resolve(target.host, policy, deadline))
   use bytes <- result.try(encode_request(request, target))
@@ -412,6 +424,10 @@ fn address_term(address: Address) -> Dynamic {
 pub fn classify(address: Address) -> AddressClass {
   case address {
     Ipv4(0, _, _, _) -> Reserved
+    // Cloud metadata services are reserved even where private networks are
+    // allowed: Alibaba's 100.100.100.200 inside 100.64/10 here, AWS's
+    // fd00:ec2::254 below, and 169.254/16 generally.
+    Ipv4(100, 100, 100, 200) -> Reserved
     Ipv4(10, _, _, _) -> Private
     Ipv4(100, b, _, _) if b >= 64 && b <= 127 -> Private
     Ipv4(127, _, _, _) -> Loopback
@@ -430,8 +446,15 @@ pub fn classify(address: Address) -> AddressClass {
     Ipv6(0, 0, 0, 0, 0, 0, 0, 1) -> Loopback
     Ipv6(0, 0, 0, 0, 0, 0xFFFF, hi, lo) -> classify(embedded(hi, lo))
     Ipv6(0x64, 0xFF9B, 0, 0, 0, 0, hi, lo) -> classify(embedded(hi, lo))
+    Ipv6(0xFD00, 0xEC2, 0, 0, 0, 0, 0, 0x254) -> Reserved
     Ipv6(0x100, 0, 0, 0, _, _, _, _) -> Reserved
+    // Teredo 2001::/32, benchmarking 2001:2::/48, ORCHID 2001:10::/28 and
+    // ORCHIDv2 2001:20::/28, documentation 2001:db8::/32 and 3fff::/20.
+    Ipv6(0x2001, 0, _, _, _, _, _, _) -> Reserved
+    Ipv6(0x2001, 2, 0, _, _, _, _, _) -> Reserved
+    Ipv6(0x2001, b, _, _, _, _, _, _) if b >= 0x10 && b <= 0x2F -> Reserved
     Ipv6(0x2001, 0xDB8, _, _, _, _, _, _) -> Reserved
+    Ipv6(0x3FFF, b, _, _, _, _, _, _) if b <= 0x0FFF -> Reserved
     Ipv6(0x2002, _, _, _, _, _, _, _) -> Reserved
     Ipv6(a, _, _, _, _, _, _, _) ->
       case
@@ -504,11 +527,18 @@ fn connect(
   ]
   case remaining(deadline) {
     0 -> not_sent(Timeout)
-    time ->
+    time -> {
+      // Sends do not time out by default; bound them by the deadline too.
+      let options =
+        list.append(options, [
+          option(a("send_timeout"), time),
+          option(a("send_timeout_close"), True),
+        ])
       // The handshake completes before any request byte is written, so
       // every failure here is pre-transmission.
       ssl_connect(address.1, target.port, options, time)
       |> result.map_error(fn(reason) { Failure(NotSent, connect_class(reason)) })
+    }
   }
 }
 
@@ -598,7 +628,12 @@ fn read_head(
   buffer: BitArray,
 ) -> Result(#(BitArray, BitArray), Failure) {
   case split_once(buffer, <<"\r\n\r\n":utf8>>) {
-    Ok(parts) -> Ok(parts)
+    // The last read may complete the head past the limit; check it whole.
+    Ok(#(head, _) as parts) ->
+      case bit_array.byte_size(head) > policy.max_header_bytes {
+        True -> sent(HeadersTooLarge)
+        False -> Ok(parts)
+      }
     Error(Nil) ->
       case bit_array.byte_size(buffer) > policy.max_header_bytes {
         True -> sent(HeadersTooLarge)
