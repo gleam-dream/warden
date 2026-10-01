@@ -1,0 +1,23 @@
+# Disposable Ory Hydra configuration for Warden interoperability tests.
+dsn: memory
+serve:
+  tls:
+    enabled: true
+    cert:
+      path: /pki/localhost.pem
+    key:
+      path: /pki/localhost.key
+urls:
+  self:
+    issuer: https://localhost:14444
+  login: https://localhost:14446/login
+  consent: https://localhost:14446/consent
+  logout: https://localhost:14446/logout
+secrets:
+  system:
+    - warden-hydra-disposable-system-secret
+oauth2:
+  pkce:
+    enforced: true
+strategies:
+  access_token: jwt

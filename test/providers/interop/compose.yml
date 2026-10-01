@@ -1,0 +1,19 @@
+# Pinned Dex and Ory Hydra for interoperability tests. Disposable only.
+name: warden-interop
+services:
+  dex:
+    image: ghcr.io/dexidp/dex:v2.45.1@sha256:8499afd690c437f52301efd2b05b2455da5bd2dfc20332cd697dc9937f808462
+    command: ["dex", "serve", "/etc/dex/dex.yaml"]
+    ports: ["127.0.0.1:15556:5556"]
+    volumes:
+      - ./dex.yaml:/etc/dex/dex.yaml:ro
+      - ../../../build/test-pki:/pki:ro
+  hydra:
+    image: oryd/hydra:v26.2.0@sha256:ff67c7fb5f95074fa53374d41151713554960504b340cd3f95b09e65deaea2a9
+    command:
+      ["serve", "all", "--sqa-opt-out", "--config", "/etc/hydra/hydra.yml"]
+    ports: ["127.0.0.1:14444:4444", "127.0.0.1:14445:4445"]
+    extra_hosts: ["host.docker.internal:host-gateway"]
+    volumes:
+      - ./hydra.yml:/etc/hydra/hydra.yml:ro
+      - ../../../build/test-pki:/pki:ro

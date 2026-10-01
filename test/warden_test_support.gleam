@@ -133,3 +133,29 @@ pub fn node_log() -> List(#(String, String, String))
 
 @external(erlang, "warden_test_support_ffi", "print")
 pub fn print(line: String) -> Nil
+
+/// Interactive provider login: follow redirects and submit HTML forms with
+/// the given fields until the provider redirects to the client.
+@external(erlang, "warden_test_support_ffi", "form_login")
+pub fn form_login(
+  url: String,
+  provider_prefix: String,
+  fields: List(#(String, String)),
+) -> Result(BrowserResult, Nil)
+
+@external(erlang, "warden_test_provider", "rotate_key")
+pub fn rotate_key(provider: Provider) -> Nil
+
+pub type WorkerName
+
+@external(erlang, "warden_test_support_ffi", "worker_kill")
+pub fn worker_kill(name: a) -> Nil
+
+@external(erlang, "warden_test_support_ffi", "worker_alive")
+pub fn worker_alive(name: a) -> Bool
+
+@external(erlang, "warden_test_support_ffi", "atom_count")
+pub fn atom_count() -> Int
+
+@external(erlang, "warden_test_support_ffi", "process_count")
+pub fn process_count() -> Int

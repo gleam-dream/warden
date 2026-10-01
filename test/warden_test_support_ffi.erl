@@ -1,7 +1,7 @@
 %% Test support exposed to Gleam tests.
 -module(warden_test_support_ffi).
 
--export([print/1, node_reset/0, node_next/2, node_log/0, keycloak_logout/1, clock_new/1, clock_set/2, clock_read/1, provider_start/1, kill_named/1, ca_pem/0, keycloak_login/3, authorize/2, visit/1, count_reset/0, count/1, handle/4, pki_file/1, spawn_collect/2]).
+-export([worker_kill/1, worker_alive/1, atom_count/0, process_count/0, form_login/3, print/1, node_reset/0, node_next/2, node_log/0, keycloak_logout/1, clock_new/1, clock_set/2, clock_read/1, provider_start/1, kill_named/1, ca_pem/0, keycloak_login/3, authorize/2, visit/1, count_reset/0, count/1, handle/4, pki_file/1, spawn_collect/2]).
 
 ca_pem() ->
     Dir = warden_test_server:pki_dir(),
@@ -151,3 +151,13 @@ node_log() ->
       || E <- json:decode(Body)].
 
 print(Line) -> io:format(user, "~ts~n", [Line]), nil.
+
+form_login(Url, Prefix, Fields) ->
+    {Result, _} = warden_test_browser:form_login(Url, Prefix, [{binary_to_list(K), binary_to_list(V)} || {K, V} <- Fields], 12),
+    to_gleam(Result).
+
+worker_kill(Name) ->
+    case whereis(Name) of undefined -> nil; Pid -> exit(Pid, kill), nil end.
+worker_alive(Name) -> whereis(Name) =/= undefined.
+atom_count() -> erlang:system_info(atom_count).
+process_count() -> erlang:system_info(process_count).

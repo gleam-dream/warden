@@ -117,7 +117,12 @@ fn make_adapter(
   max_body: Int,
 ) -> Adapter
 
-pub fn new(config: Config, worker: WorkerName, adapter: Adapter) -> Backend {
+pub fn new(
+  config: Config,
+  worker: WorkerName,
+  adapter: Adapter,
+  assume_s256: Bool,
+) -> Backend {
   let client =
     make_client(
       worker,
@@ -126,6 +131,7 @@ pub fn new(config: Config, worker: WorkerName, adapter: Adapter) -> Backend {
       config.trusted_credential(config),
       config.signing_algorithms(config),
       config.assertion_algorithms(config),
+      assume_s256,
     )
   Backend(worker:, adapter:, client:)
 }
@@ -138,6 +144,7 @@ fn make_client(
   credential: Option(String),
   id_token_algorithms: List(String),
   assertion_algorithms: List(String),
+  assume_s256: Bool,
 ) -> ClientTerm
 
 @external(erlang, "warden_ffi", "identity")

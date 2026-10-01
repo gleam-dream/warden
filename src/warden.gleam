@@ -57,6 +57,7 @@ pub opaque type Client {
     provider: String,
     supervisor: Pid,
     clock: fn() -> Int,
+    assume_s256: Bool,
   )
 }
 
@@ -174,23 +175,32 @@ pub fn start_with_clock(
   config: Config,
   clock: fn() -> Int,
 ) -> Result(Client, StartError) {
+  start_internal(config, clock, False)
+}
+
+/// NOT PART OF THE ACCEPTED CONTRACT. Conformance-harness policy for
+/// providers that do not advertise `code_challenge_methods_supported` (the
+/// OpenID conformance suite's RP-test OP). Warden still generates, sends and
+/// checks its own S256 challenge and nonce, but cannot confirm from metadata
+/// that the provider enforces PKCE (RFC 9700 §2.1.1). Pending owner decision
+/// D7; never use in production.
+@internal
+pub fn start_assuming_s256_for_conformance(
+  config: Config,
+) -> Result(Client, StartError) {
+  start_internal(config, now_seconds, True)
+}
+
+fn start_internal(
+  config: Config,
+  clock: fn() -> Int,
+  assume_s256: Bool,
+) -> Result(Client, StartError) {
   use _ <- result.try(case backend.ensure_started() {
     True -> Ok(Nil)
     False -> Error(ProcessStartFailed)
   })
   let adapter = backend.adapter(config)
-  use metadata <- result.try(
-    backend.load_metadata(config.issuer(config), adapter)
-    |> result.map_error(fn(f) { DiscoveryFailed(provider_failure(f)) }),
-  )
-  use _ <- result.try(case metadata.issuer == config.issuer(config) {
-    True -> Ok(Nil)
-    False -> Error(DiscoveryFailed(IssuerMismatch))
-  })
-  use _ <- result.try(case compatibility(config, metadata) {
-    [] -> Ok(Nil)
-    problems -> Error(ProviderIncompatible(problems))
-  })
   let worker_name = process.new_name("warden_provider")
   let transaction_name = process.new_name("warden_transactions")
   let custody_name = process.new_name("warden_custody")
@@ -234,7 +244,7 @@ pub fn start_with_clock(
       let client =
         Client(
           config:,
-          backend: backend.new(config, worker, adapter),
+          backend: backend.new(config, worker, adapter, assume_s256),
           transactions: transactions.Store(
             process.named_subject(transaction_name),
             timeout,
@@ -243,25 +253,69 @@ pub fn start_with_clock(
           provider: provider_binding(config),
           supervisor: supervisor_pid,
           clock:,
+          assume_s256:,
         )
-      case wait_ready(worker, config.startup_timeout_ms(config)) {
-        True -> Ok(client)
-        False -> {
+      // One discovery on the success path: the oidcc worker's own load. A
+      // second, diagnostic load runs only when the worker is not ready after
+      // a short delay, to report a typed failure.
+      let checked = case
+        wait_ready(
+          worker,
+          issuer,
+          adapter,
+          config.startup_timeout_ms(config),
+          0,
+        )
+      {
+        Error(error) -> Error(error)
+        Ok(Nil) ->
+          case backend.metadata(client.backend) {
+            Error(failure) -> Error(DiscoveryFailed(provider_failure(failure)))
+            Ok(metadata) if metadata.issuer != issuer ->
+              Error(DiscoveryFailed(IssuerMismatch))
+            Ok(metadata) ->
+              case compatibility(config, metadata, assume_s256) {
+                [] -> Ok(client)
+                problems -> Error(ProviderIncompatible(problems))
+              }
+          }
+      }
+      case checked {
+        Ok(client) -> Ok(client)
+        Error(error) -> {
           stop(client)
-          Error(StartupTimedOut)
+          Error(error)
         }
       }
     }
   }
 }
 
-fn wait_ready(worker: backend.WorkerName, remaining: Int) -> Bool {
+const diagnose_after_ms = 1500
+
+fn wait_ready(
+  worker: backend.WorkerName,
+  issuer: String,
+  adapter: backend.Adapter,
+  remaining: Int,
+  elapsed: Int,
+) -> Result(Nil, StartError) {
   case backend.ready(worker) {
-    True -> True
-    False if remaining <= 0 -> False
+    True -> Ok(Nil)
+    False if remaining <= 0 -> Error(StartupTimedOut)
+    False if elapsed == diagnose_after_ms ->
+      case backend.load_metadata(issuer, adapter) {
+        Error(failure) -> Error(DiscoveryFailed(provider_failure(failure)))
+        Ok(metadata) if metadata.issuer != issuer ->
+          Error(DiscoveryFailed(IssuerMismatch))
+        Ok(_) -> {
+          process.sleep(25)
+          wait_ready(worker, issuer, adapter, remaining - 25, elapsed + 25)
+        }
+      }
     False -> {
       process.sleep(25)
-      wait_ready(worker, remaining - 25)
+      wait_ready(worker, issuer, adapter, remaining - 25, elapsed + 25)
     }
   }
 }
@@ -273,11 +327,16 @@ fn provider_binding(config: Config) -> String {
 fn compatibility(
   config: Config,
   metadata: backend.Metadata,
+  assume_s256: Bool,
 ) -> List(Incompatibility) {
   let method = config.authentication_method(config)
   let assertion_algorithms = config.assertion_algorithms(config)
   let checks = [
-    #(list.contains(metadata.code_challenge_methods, "S256"), NoS256),
+    #(
+      list.contains(metadata.code_challenge_methods, "S256")
+        || { assume_s256 && metadata.code_challenge_methods == [] },
+      NoS256,
+    ),
     #(
       list.contains(metadata.grant_types, "authorization_code"),
       AuthorizationCodeGrantUnsupported,
@@ -468,10 +527,12 @@ pub fn begin_login(
     backend.metadata(client.backend)
     |> result.map_error(fn(f) { LoginProviderUnavailable(provider_failure(f)) }),
   )
-  use _ <- result.try(case compatibility(client.config, metadata) {
-    [] -> Ok(Nil)
-    problems -> Error(LoginProviderIncompatible(problems))
-  })
+  use _ <- result.try(
+    case compatibility(client.config, metadata, client.assume_s256) {
+      [] -> Ok(Nil)
+      problems -> Error(LoginProviderIncompatible(problems))
+    },
+  )
   let binding = case browser {
     Some(binding) -> binding
     None -> BrowserBinding(random_token(32))
@@ -1999,6 +2060,11 @@ pub fn transaction_store(client: Client) -> transactions.Store {
 @internal
 pub fn custody_owner(client: Client) -> custody.Store(VerifiedIdentity) {
   client.custody
+}
+
+@internal
+pub fn provider_worker(client: Client) -> backend.WorkerName {
+  client.backend.worker
 }
 
 @internal

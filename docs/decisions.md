@@ -59,3 +59,40 @@ every call:
 
 See [P3](probes/P3-refresh.md). The default adapter reports
 `RefreshResponseQuarantined(SubjectMismatchOrIdTokenAbsent, _)`.
+
+## D7 — PKCE S256 advertisement required (open, owner decision)
+
+- Evidence: the OpenID conformance suite's RP-test OP (release-v5.3.1) does
+  not publish `code_challenge_methods_supported`. Warden's accepted contract
+  (design §3.2/§3.3; RFC 9700 §2.1.1 "ensure the AS supports PKCE") rejects
+  such providers at startup with `ProviderIncompatible([NoS256])`, so no RP
+  plan runs under the default policy.
+- Conformance evidence was produced with the internal, non-default
+  `warden.start_assuming_s256_for_conformance`: Warden still generates,
+  sends and verifies its own S256 challenge and nonce, but tolerates the
+  missing advertisement (oidcc is told S256 is supported). Every result from
+  it is labelled in `docs/evidence/conformance/`.
+- Options: (a) keep the contract and treat conformance runs as evidence under
+  a documented harness policy (recommended); (b) add a public, explicit
+  opt-in policy for providers that support but do not advertise PKCE;
+  (c) require advertisement unconditionally and accept no local conformance
+  evidence.
+
+## D8 — Unusable JWKS keys (adopted, Warden fix for an upstream defect)
+
+- jose 1.11.12 keeps unparseable JWKs as `{error, _}` entries in a key set;
+  oidcc 3.9.0's signature fold crashes on them when no earlier key matched,
+  before its unknown-kid refresh. The suite's key-rotation module exposed it.
+- The boundary filters non-key entries from the client context and from the
+  refresh callback (RFC 7517 §5). Regression:
+  `signing_key_rotation_refreshes_keys_test` fails without the filter.
+- oidcc's worker `has_kid/2` also has no clause for a key without `kid` in a
+  set position it inspects; not reached by current tests. Both are upstream
+  defects to report.
+
+## D9 — Startup performs one discovery (adopted)
+
+- Warden validates the metadata the oidcc worker loaded instead of fetching
+  discovery itself first; a diagnostic fetch runs only if the worker is not
+  ready after 1.5 s, to return a typed failure. Found by the suite's
+  discovery-only modules, which finish on the first request.

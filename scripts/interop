@@ -1,0 +1,23 @@
+#!/bin/sh
+# Start or stop pinned Dex and Ory Hydra (plus Hydra's headless login/consent
+# app) for interoperability tests.
+#   scripts/interop up | down
+set -eu
+ROOT=$(cd "$(dirname "$0")/.." && pwd)
+COMPOSE="docker compose -f $ROOT/test/providers/interop/compose.yml"
+case "${1:-up}" in
+  up)
+    "$ROOT/scripts/test-pki"
+    $COMPOSE up -d
+    for url in https://localhost:15556/dex/.well-known/openid-configuration https://localhost:14444/.well-known/openid-configuration; do
+      i=0
+      until curl -sf --cacert "$ROOT/build/test-pki/ca.pem" "$url" >/dev/null; do
+        i=$((i + 1)); [ "$i" -gt 60 ] && { echo "not ready: $url" >&2; exit 1; }; sleep 1
+      done
+    done
+    [ -f "$ROOT/test/providers/interop/hydra-setup.sh" ] && sh "$ROOT/test/providers/interop/hydra-setup.sh"
+    echo "interop providers ready"
+    ;;
+  down) $COMPOSE down -v ;;
+  *) echo "usage: $0 up|down" >&2; exit 2 ;;
+esac

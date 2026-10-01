@@ -77,7 +77,13 @@ pub fn main() -> Nil {
     Error(errors) ->
       panic as { "invalid configuration: " <> string.inspect(errors) }
   }
-  let client = case warden.start(validated) {
+  // WARDEN_CONFORMANCE_ASSUME_S256=1 selects a non-default, internal
+  // harness policy (see warden.start_assuming_s256_for_conformance).
+  let started = case env("WARDEN_CONFORMANCE_ASSUME_S256", "") {
+    "1" -> warden.start_assuming_s256_for_conformance(validated)
+    _ -> warden.start(validated)
+  }
+  let client = case started {
     Ok(client) -> client
     Error(error) ->
       panic as { "warden did not start: " <> string.inspect(error) }

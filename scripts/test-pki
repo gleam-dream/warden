@@ -32,5 +32,6 @@ leaf localhost ca "DNS:localhost,IP:127.0.0.1"
 leaf wrong_host ca "DNS:wrong.example"
 leaf expired ca "DNS:localhost" 20200101000000Z 20210101000000Z
 leaf self_signed untrusted "DNS:localhost"
+leaf conformance ca "DNS:localhost.emobix.co.uk,DNS:localhost"
 rm -f untrusted.pem
 chmod 600 ./*.key ./*.cakey

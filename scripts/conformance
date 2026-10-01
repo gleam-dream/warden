@@ -1,0 +1,8 @@
+#!/bin/sh
+# Run OpenID RP conformance plans against the reference RP.
+#   scripts/conformance-suite up
+#   nix develop -c scripts/conformance [basic,formpost,config,thirdparty,refresh,logout]
+set -eu
+ROOT=$(cd "$(dirname "$0")/.." && pwd)
+(cd "$ROOT/consumer" && gleam build >/dev/null)
+NODE_EXTRA_CA_CERTS="$ROOT/build/test-pki/ca.pem" node "$ROOT/test/conformance/run.mjs" "${1:-basic,formpost,config,thirdparty,refresh,logout}"

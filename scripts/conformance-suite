@@ -1,0 +1,21 @@
+#!/bin/sh
+# Start or stop the pinned OpenID conformance suite (release-v5.3.1, dev mode)
+# with a certificate from the disposable test CA.
+#   scripts/conformance-suite up | down
+set -eu
+ROOT=$(cd "$(dirname "$0")/.." && pwd)
+export IMAGE_TAG=release-v5.3.1
+COMPOSE="docker compose -p warden-conformance -f $ROOT/test/conformance/docker-compose-prebuilt.upstream.yml -f $ROOT/test/conformance/compose.override.yml"
+case "${1:-up}" in
+  up)
+    "$ROOT/scripts/test-pki"
+    $COMPOSE up -d --pull missing
+    i=0
+    until curl -sf --cacert "$ROOT/build/test-pki/ca.pem" https://localhost.emobix.co.uk:8443/api/runner/available >/dev/null; do
+      i=$((i + 1)); [ "$i" -gt 180 ] && { echo "suite not ready" >&2; exit 1; }; sleep 2
+    done
+    echo "conformance suite ready: https://localhost.emobix.co.uk:8443"
+    ;;
+  down) $COMPOSE down -v ;;
+  *) echo "usage: $0 up|down" >&2; exit 2 ;;
+esac

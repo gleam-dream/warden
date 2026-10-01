@@ -12,7 +12,7 @@
 %% SSO or simulate separate browsers.
 -module(warden_test_browser).
 
--export([new/0, login/4, get/2, visit/2, authorize/3]).
+-export([new/0, login/4, get/2, visit/2, authorize/3, form_login/4]).
 
 new() -> #{cookies => #{}}.
 
@@ -46,6 +46,32 @@ login(Browser0, AuthorizationUrl, Username, Password) ->
     end.
 
 visit(Browser, Url) -> get(Browser, Url).
+
+%% Generic interactive login: follow redirects inside ProviderPrefix; on an
+%% HTML page with a POST form, submit it with its hidden inputs plus Fields
+%% ([{Name, Value}]). Stops at a redirect leaving the provider.
+form_login(Url, ProviderPrefix, Fields, Limit) ->
+    {ok, _} = application:ensure_all_started([inets, ssl]),
+    step(get(new(), Url), Url, ProviderPrefix, Fields, Limit).
+
+step({{Status, Headers, _}, Browser} = Response, Base, Prefix, Fields, N) when Status >= 300, Status < 400, N > 0 ->
+    Location = uri_string:resolve(proplists:get_value("location", Headers), to_list(Base)),
+    case lists:prefix(to_list(Prefix), Location) of
+        true -> step(get(Browser, Location), Location, Prefix, Fields, N - 1);
+        false -> handle_final(Response, none)
+    end;
+step({{200, _Headers, Html}, Browser}, Base, Prefix, Fields, N) when N > 0 ->
+    case re:run(Html, <<"<form[^>]*method=\"?post\"?[^>]*action=\"([^\"]*)\"">>, [caseless, {capture, all_but_first, binary}]) of
+        {match, [Action0]} ->
+            Action = uri_string:resolve(binary_to_list(unescape(Action0)), to_list(Base)),
+            Hidden = hidden_inputs(Html),
+            Body = uri_string:compose_query(Hidden ++ Fields),
+            step(post(Browser, Action, Body), Action, Prefix, Fields, N - 1);
+        nomatch ->
+            {{error, no_form}, Browser}
+    end;
+step({_, Browser}, _Base, _Prefix, _Fields, _N) ->
+    {{error, unexpected}, Browser}.
 
 %% Follow provider redirects (headless node-oidc-provider interactions) until
 %% the provider answers towards the client: a redirect outside ProviderPrefix

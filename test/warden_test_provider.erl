@@ -12,7 +12,7 @@
 
 -export([
     start/0, start/1, stop/1, issuer/1, issue_code/3, script/3, token_requests/1,
-    metadata/2, refresh_tokens/1, set_claims/2, sign/2, key/1
+    metadata/2, refresh_tokens/1, set_claims/2, sign/2, key/1, rotate_key/1
 ]).
 
 -define(CLIENT, <<"warden-rp">>).
@@ -70,6 +70,14 @@ script(#{table := Table}, Key, Behaviour) ->
 refresh_tokens(#{table := Table}) ->
     [T || {{refresh, T}, _} <- ets:tab2list(Table)].
 
+%% Replace the signing key (new kid); the JWKS endpoint serves only the new key.
+rotate_key(#{table := Table}) ->
+    ets:insert(Table, {junk_keys, true}),
+    Key = jose_jwk:generate_key({rsa, 2048}),
+    Kid = base64:encode(crypto:strong_rand_bytes(6), #{mode => urlsafe, padding => false}),
+    ets:insert(Table, {key, Key, Kid}),
+    nil.
+
 lookup(Table, Key) ->
     [{Key, V}] = ets:lookup(Table, Key),
     V.
@@ -101,7 +109,17 @@ handle(Table, #{path := <<"/.well-known/openid-configuration">>}) ->
 handle(Table, #{path := <<"/jwks">>}) ->
     [{key, Key, Kid}] = ets:lookup(Table, key),
     {_, Public} = jose_jwk:to_public_map(Key),
-    json(200, #{<<"keys">> => [Public#{<<"kid">> => Kid, <<"use">> => <<"sig">>, <<"alg">> => <<"RS256">>}]});
+    Real = Public#{<<"kid">> => Kid, <<"use">> => <<"sig">>, <<"alg">> => <<"RS256">>},
+    %% Optional unusable keys listed before the real one (RFC 7517 §5 says a
+    %% client must ignore them), as the OpenID conformance suite does.
+    Junk =
+        case ets:lookup(Table, junk_keys) of
+            [{junk_keys, true}] ->
+                [#{<<"kty">> => <<"AKP">>, <<"alg">> => <<"ML-DSA-9999">>, <<"kid">> => <<"pq">>, <<"use">> => <<"sig">>, <<"pub">> => <<"AAAA">>},
+                 #{<<"kty">> => <<"MADE-UP">>, <<"kid">> => <<"made-up">>, <<"use">> => <<"sig">>}];
+            _ -> []
+        end,
+    json(200, #{<<"keys">> => Junk ++ [Real]});
 handle(Table, #{path := <<"/token">>, body := Body}) ->
     ets:update_counter(Table, token_requests, 1),
     Params = maps:from_list(uri_string:dissect_query(Body)),

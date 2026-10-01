@@ -21,10 +21,12 @@
 -include_lib("oidcc/include/oidcc_client_context.hrl").
 -include_lib("oidcc/include/oidcc_token.hrl").
 -include_lib("oidcc/include/oidcc_token_introspection.hrl").
+-include_lib("jose/include/jose_jwk.hrl").
 
 -export([
     adapter/5,
     client/6,
+    client/7,
     load_metadata/2,
     start_worker/3,
     stop_worker/1,
@@ -105,7 +107,15 @@ adapter(Trust, Destinations, AllowedHosts, TimeoutMs, MaxBody) ->
 %% Client description used by every operation. `Credential` is
 %% `{some, SecretOrJwkJson}` or `none`.
 client(Worker, ClientId, AuthMethod, Credential, IdTokenAlgs, AssertionAlgs) ->
+    client(Worker, ClientId, AuthMethod, Credential, IdTokenAlgs, AssertionAlgs, false).
+
+%% `AssumeS256` is a non-default conformance-harness policy: when provider
+%% metadata omits `code_challenge_methods_supported`, oidcc is told that S256
+%% is supported. Warden still derives, sends and checks its own S256
+%% challenge; only the metadata assurance is missing.
+client(Worker, ClientId, AuthMethod, Credential, IdTokenAlgs, AssertionAlgs, AssumeS256) ->
     #{
+        assume_s256 => AssumeS256,
         worker => Worker,
         client_id => ClientId,
         auth_method => binary_to_atom(AuthMethod),
@@ -226,8 +236,31 @@ context(#{worker := Worker, client_id := ClientId, credential := Credential, aut
             {_, {some, Secret}} -> {Secret, #{}}
         end,
     case oidcc_client_context:from_configuration_worker(Worker, ClientId, SecretSlot, ContextOpts) of
-        {ok, Context} -> {ok, narrow(Context, Client)};
+        {ok, Context} -> {ok, usable_keys(narrow(Context, Client))};
         {error, provider_not_ready} -> {error, provider_not_ready}
+    end.
+
+%% RFC 7517 §5: ignore keys that cannot be used. jose 1.11.12 keeps an
+%% unparseable JWK (unknown kty, missing members) as an `{error, _}` entry
+%% inside the key set, and oidcc 3.9.0's signature fold crashes on such an
+%% entry when no earlier key matched the token's kid, before its unknown-kid
+%% refresh can run. Warden removes those entries from the context's keys and
+%% from keys returned by the refresh callback.
+usable_keys(#oidcc_client_context{jwks = Jwks} = Context) ->
+    Context#oidcc_client_context{jwks = filter_jwks(Jwks)}.
+
+filter_jwks(#jose_jwk{keys = {jose_jwk_set, Keys}} = Set) ->
+    Set#jose_jwk{keys = {jose_jwk_set, [K || #jose_jwk{} = K <- Keys]}};
+filter_jwks(Other) ->
+    Other.
+
+refresh_jwks(Worker) ->
+    Refresh = oidcc_jwt_util:refresh_jwks_fun(Worker),
+    fun(Jwks, Kid) ->
+        case Refresh(Jwks, Kid) of
+            {ok, Refreshed} -> {ok, filter_jwks(Refreshed)};
+            Other -> Other
+        end
     end.
 
 narrow(#oidcc_client_context{provider_configuration = C} = Context, Client) ->
@@ -241,8 +274,14 @@ narrow(#oidcc_client_context{provider_configuration = C} = Context, Client) ->
         maps:get(assertion_algs, Client)
     ),
     UserinfoAlgs = intersect(C#oidcc_provider_configuration.userinfo_signing_alg_values_supported, maps:get(id_token_algs, Client)),
+    Pkce =
+        case {C#oidcc_provider_configuration.code_challenge_methods_supported, maps:get(assume_s256, Client, false)} of
+            {undefined, true} -> [<<"S256">>];
+            {Methods, _} -> Methods
+        end,
     Context#oidcc_client_context{
         provider_configuration = C#oidcc_provider_configuration{
+            code_challenge_methods_supported = Pkce,
             id_token_signing_alg_values_supported = IdAlgs,
             id_token_encryption_alg_values_supported = undefined,
             id_token_encryption_enc_values_supported = undefined,
@@ -326,7 +365,7 @@ exchange_code(Client, Params) ->
                 require_pkce => true,
                 trusted_audiences => [],
                 validate_azp => client_id,
-                refresh_jwks => oidcc_jwt_util:refresh_jwks_fun(maps:get(worker, Client))
+                refresh_jwks => refresh_jwks(maps:get(worker, Client))
             },
             case oidcc_token:retrieve(Code, Context, Opts) of
                 {ok, Token} -> {ok, flatten_token(Token)};
@@ -346,7 +385,7 @@ refresh(Client, Params) ->
                 expected_subject => Subject,
                 trusted_audiences => [],
                 validate_azp => client_id,
-                refresh_jwks => oidcc_jwt_util:refresh_jwks_fun(maps:get(worker, Client))
+                refresh_jwks => refresh_jwks(maps:get(worker, Client))
             },
             case oidcc_token:refresh(RefreshToken, Context, Opts) of
                 {ok, Token} -> {ok, flatten_token(Token)};
@@ -400,7 +439,7 @@ client_credentials(Client, Params) ->
             #{adapter := Adapter, scopes := Scopes} = Params,
             Opts = (base_opts(Client, Adapter))#{
                 scope => Scopes,
-                refresh_jwks => oidcc_jwt_util:refresh_jwks_fun(maps:get(worker, Client))
+                refresh_jwks => refresh_jwks(maps:get(worker, Client))
             },
             case oidcc_token:client_credentials(Context, Opts) of
                 {ok, Token} -> {ok, flatten_token(Token)};

@@ -46,6 +46,9 @@ pub fn handle(request: Request, context: Context) -> Response {
     http.Get, ["logged-out"] ->
       page(200, "Signed out", "<p>You are signed out.</p>")
     http.Get, ["health"] -> wisp.ok()
+    // Front-channel logout is not implemented by Warden (explicit gap); the
+    // route exists only so logout plans accept the client configuration.
+    http.Get, ["frontchannel-logout"] -> wisp.ok()
     _, _ -> wisp.not_found()
   }
 }
@@ -241,7 +244,11 @@ fn refresh(request: Request, context: Context) -> Response {
     Error(Nil) -> wisp.redirect("/")
     Ok(s) -> {
       let outcome = case warden.refresh_session(context.client, s) {
-        Ok(warden.RefreshCompleted(_)) -> "completed"
+        Ok(warden.RefreshCompleted(refreshed)) ->
+          case warden.userinfo(context.client, refreshed) {
+            Ok(_) | Error(warden.UserinfoNotSupported) -> "completed"
+            Error(_) -> "completed-userinfo-rejected"
+          }
         Ok(warden.RefreshPublicationUnresolved(recovery)) ->
           case warden.recover_refresh_publication(context.client, recovery) {
             Ok(warden.RefreshCompleted(_)) -> "completed"
