@@ -1,0 +1,25 @@
+#!/bin/sh
+# Start or stop the scriptable node-oidc-provider used by integration tests.
+#   scripts/node-provider up | down
+set -eu
+ROOT=$(cd "$(dirname "$0")/.." && pwd)
+DIR="$ROOT/test/providers/node-oidc"
+PIDFILE="$ROOT/build/node-provider.pid"
+case "${1:-up}" in
+  up)
+    "$ROOT/scripts/test-pki"
+    [ -d "$DIR/node_modules" ] || (cd "$DIR" && npm ci --no-fund --no-audit >/dev/null)
+    if [ -f "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE")" 2>/dev/null; then kill "$(cat "$PIDFILE")"; sleep 1; fi
+    (cd "$DIR" && nohup node provider.mjs >"$ROOT/build/node-provider.log" 2>&1 & echo $! >"$PIDFILE")
+    i=0
+    until curl -sf --cacert "$ROOT/build/test-pki/ca.pem" https://localhost:19443/.well-known/openid-configuration >/dev/null; do
+      i=$((i + 1)); [ "$i" -gt 50 ] && { cat "$ROOT/build/node-provider.log" >&2; exit 1; }; sleep 0.2
+    done
+    echo "node provider ready: https://localhost:19443"
+    ;;
+  down)
+    [ -f "$PIDFILE" ] && kill "$(cat "$PIDFILE")" 2>/dev/null || true
+    rm -f "$PIDFILE"
+    ;;
+  *) echo "usage: $0 up|down" >&2; exit 2 ;;
+esac

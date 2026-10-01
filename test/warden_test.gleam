@@ -1,12 +1,8 @@
-import gleeunit
-import gleeunit/should
-import warden
+//// Test entry point. See `warden_test_runner.erl` for suite selection.
 
 pub fn main() -> Nil {
-  gleeunit.main()
+  run()
 }
 
-pub fn version_test() {
-  warden.version()
-  |> should.equal("0.1.0")
-}
+@external(erlang, "warden_test_runner", "main")
+fn run() -> Nil

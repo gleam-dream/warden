@@ -1,0 +1,11 @@
+{
+  "name": "warden-test-provider",
+  "private": true,
+  "type": "module",
+  "description": "Disposable scriptable OpenID provider for Warden tests (node-oidc-provider + panva/jose).",
+  "license": "Apache-2.0",
+  "dependencies": {
+    "jose": "6.2.12",
+    "oidc-provider": "9.12.2"
+  }
+}

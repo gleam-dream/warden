@@ -1,0 +1,26 @@
+#!/bin/sh
+# Start, stop or wait for the pinned local Keycloak used by integration tests.
+#   scripts/keycloak up | down | wait
+set -eu
+ROOT=$(cd "$(dirname "$0")/.." && pwd)
+export KEYCLOAK_DIGEST=37dbaf6f0722c9ec246335f36e1ef8b2e6cb960f7c27e0d8c615121a3d475a85
+COMPOSE="docker compose -f $ROOT/test/providers/keycloak/compose.yml"
+case "${1:-up}" in
+  up)
+    "$ROOT/scripts/test-pki"
+    $COMPOSE up -d
+    "$0" wait
+    ;;
+  down) $COMPOSE down -v ;;
+  wait)
+    i=0
+    until curl -sf --cacert "$ROOT/build/test-pki/ca.pem" \
+      https://localhost:18443/realms/warden/.well-known/openid-configuration >/dev/null; do
+      i=$((i + 1))
+      if [ "$i" -gt 120 ]; then echo "keycloak did not become ready" >&2; exit 1; fi
+      sleep 1
+    done
+    echo "keycloak ready: https://localhost:18443/realms/warden"
+    ;;
+  *) echo "usage: $0 up|down|wait" >&2; exit 2 ;;
+esac

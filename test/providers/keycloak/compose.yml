@@ -1,0 +1,23 @@
+# Pinned local Keycloak for Warden integration tests. Disposable: realm users,
+# client secrets and TLS keys exist only for local testing.
+name: warden-keycloak
+services:
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.7.5@sha256:${KEYCLOAK_DIGEST:?set by scripts/keycloak}
+    command:
+      - start-dev
+      - --import-realm
+      - --https-port=8443
+      - --http-enabled=false
+      - --hostname=https://localhost:18443
+      - --https-certificate-file=/pki/localhost.pem
+      - --https-certificate-key-file=/pki/localhost.key
+      - --health-enabled=true
+    environment:
+      KC_BOOTSTRAP_ADMIN_USERNAME: admin
+      KC_BOOTSTRAP_ADMIN_PASSWORD: admin-disposable
+    ports:
+      - "127.0.0.1:18443:8443"
+    volumes:
+      - ./realm-warden.json:/opt/keycloak/data/import/realm-warden.json:ro
+      - ../../../build/test-pki:/pki:ro

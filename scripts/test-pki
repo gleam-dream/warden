@@ -1,0 +1,10 @@
+#!/bin/sh
+# Generate the disposable test PKI in build/test-pki if it is missing.
+set -eu
+ROOT=$(cd "$(dirname "$0")/.." && pwd)
+cd "$ROOT"
+if [ ! -f build/test-pki/ca.pem ]; then
+  gleam build >/dev/null
+  erl -noshell -pa build/dev/erlang/*/ebin \
+    -eval 'warden_test_pki:generate("build/test-pki"), halt().'
+fi

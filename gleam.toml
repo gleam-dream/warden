@@ -2,14 +2,20 @@ name = "warden"
 version = "0.1.0"
 target = "erlang"
 gleam = ">= 1.18.0"
-licenses = ["Apache-2.0"]
-description = "A typed Gleam OIDC / OAuth 2.0 Relying Party, built on the certified oidcc backend via FFI."
+licences = ["Apache-2.0"]
+description = "A typed Gleam OIDC / OAuth 2.0 Relying Party, built on the oidcc backend via FFI."
 repository = { type = "github", user = "gleam-dream", repo = "warden" }
+internal_modules = ["warden/internal", "warden/internal/*"]
 
 [dependencies]
 gleam_stdlib = ">= 0.70.0 and < 1.0.0"
 gleam_erlang = ">= 1.0.0 and < 2.0.0"
 gleam_otp = ">= 1.0.0 and < 2.0.0"
+gleam_json = ">= 3.0.0 and < 4.0.0"
+oidcc = "== 3.9.0"
+jose = "== 1.11.12"
+telemetry = "== 1.4.2"
+telemetry_registry = "== 0.3.2"
 
 [dev-dependencies]
 gleeunit = ">= 1.0.0 and < 2.0.0"
