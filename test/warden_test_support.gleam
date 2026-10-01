@@ -234,3 +234,7 @@ pub fn client_private_jwk() -> String
 pub fn jwk_private_member(jwk: String) -> Result(String, Nil) {
   json.parse(jwk, decode.at(["d"], decode.string)) |> result.replace_error(Nil)
 }
+
+/// Messages waiting in the calling process's mailbox.
+@external(erlang, "warden_test_support_ffi", "mailbox_size")
+pub fn mailbox_size() -> Int

@@ -5,6 +5,7 @@
 import gleam/erlang/process
 import gleam/int
 import gleam/option.{None}
+import warden/internal/call
 import warden/internal/transaction_store as store
 import warden/internal/transport
 import warden_test_support as support
@@ -99,4 +100,21 @@ pub fn a_full_store_answers_without_scanning_test() {
   })
   // Before the fix each rejected put swept every record (~18 ms each).
   assert transport.monotonic_ms() - started < 100
+}
+
+/// A reply that arrives after the caller gave up must not stay in the
+/// caller's mailbox, where it would hold login secrets (finding F4).
+pub fn late_replies_do_not_reach_the_caller_test() {
+  let #(s, clock) = start(10, 600)
+  let assert store.Stored(_) = put(s, "a", clock)
+  // Tests share a process: compare against messages already waiting.
+  let before = support.mailbox_size()
+  let assert Ok(release) = store.hold(s)
+  let impatient = store.Store(..s, timeout: 50)
+  assert store.get(impatient, "a") == Error(call.CallTimedOut)
+  process.send(release, Nil)
+  // Let the store process the queued request and reply.
+  let assert Ok(store.Found(..)) = store.get(s, "a")
+  process.sleep(50)
+  assert support.mailbox_size() == before
 }
