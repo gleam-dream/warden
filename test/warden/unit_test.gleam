@@ -9,6 +9,7 @@ import warden
 import warden/config
 import warden/internal/callback
 import warden/internal/secure
+import warden_test_support as support
 
 // --- RFC 7636 Appendix B -----------------------------------------------------
 
@@ -242,4 +243,55 @@ pub fn callback_parser_is_total_test() {
   })
   let _ = random_bytes(1)
   Nil
+}
+
+// --- Internal security review: configuration (C10, C12, J7) -------------------
+
+pub fn trust_anchors_must_all_be_certificates_test() {
+  // A CERTIFICATE block whose content is not a certificate.
+  let bogus = "-----BEGIN CERTIFICATE-----\nAAAA\n-----END CERTIFICATE-----\n"
+  let assert Error([config.InvalidTrustAnchors]) =
+    config.validate(config.with_trust(base(), config.TrustAnchorsPem(bogus)))
+  // A private key bundled with a valid anchor is refused, not ignored.
+  let bundle = support.ca_pem() <> support.pki_file("localhost.key")
+  let assert Error([config.InvalidTrustAnchors]) =
+    config.validate(config.with_trust(base(), config.TrustAnchorsPem(bundle)))
+  let assert Ok(_) =
+    config.validate(config.with_trust(
+      base(),
+      config.TrustAnchorsPem(support.ca_pem()),
+    ))
+}
+
+pub fn client_secrets_must_be_usable_test() {
+  let with = fn(authentication) {
+    config.validate(config.Settings(..base(), authentication:))
+  }
+  let assert Error([config.EmptyClientSecret]) =
+    with(config.ClientSecretBasic(config.secret("")))
+  let assert Error([config.EmptyClientSecret]) =
+    with(config.ClientSecretPost(config.secret("")))
+  // HS256 needs a key of at least 32 bytes (RFC 7518 §3.2).
+  let assert Error([config.ClientSecretTooShort]) =
+    with(config.ClientSecretJwt(config.secret(string.repeat("k", 31))))
+  let assert Ok(_) =
+    with(config.ClientSecretJwt(config.secret(string.repeat("k", 32))))
+}
+
+pub fn jwt_secret_length_limits_the_hmac_algorithms_test() {
+  let algorithms = fn(length) {
+    let assert Ok(validated) =
+      config.validate(
+        config.Settings(
+          ..base(),
+          authentication: config.ClientSecretJwt(
+            config.secret(string.repeat("k", length)),
+          ),
+        ),
+      )
+    config.assertion_algorithms(validated)
+  }
+  assert algorithms(32) == ["HS256"]
+  assert algorithms(48) == ["HS256", "HS384"]
+  assert algorithms(64) == ["HS256", "HS384", "HS512"]
 }

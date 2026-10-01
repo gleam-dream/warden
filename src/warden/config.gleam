@@ -358,6 +358,11 @@ pub type ConfigError {
   InvalidLimit(String)
   /// `AssumeS256WhenUnadvertised` with `PublicClient`.
   UnadvertisedPkceRequiresConfidentialClient
+  /// A client secret is empty.
+  EmptyClientSecret
+  /// A `client_secret_jwt` secret is shorter than 32 bytes, the minimum HMAC
+  /// key for HS256 (RFC 7518 §3.2).
+  ClientSecretTooShort
 }
 
 /// A validated configuration.
@@ -432,6 +437,8 @@ pub fn validate(settings: Settings) -> Result(Config, List(ConfigError)) {
         || settings.authentication != PublicClient,
       UnadvertisedPkceRequiresConfidentialClient,
     ),
+    check(client_secret_present(settings.authentication), EmptyClientSecret),
+    check(jwt_secret_long_enough(settings.authentication), ClientSecretTooShort),
   ]
   let scope_errors =
     scopes
@@ -574,6 +581,33 @@ fn valid_host(host: String) -> Bool {
   host != "" && !string.contains(host, "/") && !string.contains(host, ":")
 }
 
+fn client_secret_present(authentication: ClientAuthentication) -> Bool {
+  case authentication {
+    ClientSecretBasic(secret)
+    | ClientSecretPost(secret)
+    | ClientSecretJwt(secret) -> secret.reveal() != ""
+    _ -> True
+  }
+}
+
+/// RFC 7518 §3.2: an HMAC key at least as long as the hash output.
+fn hmac_key_bytes(algorithm: String) -> Int {
+  case algorithm {
+    "HS384" -> 48
+    "HS512" -> 64
+    _ -> 32
+  }
+}
+
+fn jwt_secret_long_enough(authentication: ClientAuthentication) -> Bool {
+  case authentication {
+    ClientSecretJwt(secret) ->
+      secret.reveal() == ""
+      || string.byte_size(secret.reveal()) >= hmac_key_bytes("HS256")
+    _ -> True
+  }
+}
+
 fn authentication_usable(authentication: ClientAuthentication) -> Bool {
   case authentication {
     PrivateKeyJwt(key) -> key.algorithms != []
@@ -596,32 +630,47 @@ pub fn algorithm_name(algorithm: SigningAlgorithm) -> String {
   }
 }
 
-/// DER certificates from PEM text; an error when none are present.
+/// DER certificates from PEM text. Every block must be an X.509
+/// certificate that decodes; any other block (a private key, a corrupt
+/// certificate) rejects the whole input, as does an input with none.
 fn pem_certificates(pem: String) -> Result(List(BitArray), Nil) {
-  let certificate = {
+  let entry = {
     use kind <- decode.field(0, atom.decoder())
     use der <- decode.field(1, decode.bit_array)
-    decode.success(case atom.to_string(kind) {
-      "Certificate" -> Ok(der)
-      _ -> Error(Nil)
-    })
+    decode.success(#(atom.to_string(kind), der))
   }
-  case exception.rescue(fn() { pem_decode(<<pem:utf8>>) }) {
-    Ok(entries) ->
-      case decode.run(entries, decode.list(certificate)) {
-        Ok(decoded) ->
-          case result.values(decoded) {
-            [] -> Error(Nil)
-            ders -> Ok(ders)
+  use entries <- result.try(
+    exception.rescue(fn() { pem_decode(<<pem:utf8>>) })
+    |> result.replace_error(Nil),
+  )
+  use entries <- result.try(
+    decode.run(entries, decode.list(entry)) |> result.replace_error(Nil),
+  )
+  use ders <- result.try(
+    list.try_map(entries, fn(entry) {
+      case entry {
+        #("Certificate", der) ->
+          case
+            exception.rescue(fn() { pkix_decode_cert(der, atom.create("otp")) })
+          {
+            Ok(_) -> Ok(der)
+            Error(_) -> Error(Nil)
           }
-        Error(_) -> Error(Nil)
+        _ -> Error(Nil)
       }
-    Error(_) -> Error(Nil)
+    }),
+  )
+  case ders {
+    [] -> Error(Nil)
+    _ -> Ok(ders)
   }
 }
 
 @external(erlang, "public_key", "pem_decode")
 fn pem_decode(pem: BitArray) -> Dynamic
+
+@external(erlang, "public_key", "pkix_decode_cert")
+fn pkix_decode_cert(der: BitArray, form: atom.Atom) -> Dynamic
 
 // ---------------------------------------------------------------------------
 // Accessors for Warden's own modules. These expose validated configuration,
@@ -739,7 +788,11 @@ pub fn trusted_credential(config: Config) -> Option(String) {
 @internal
 pub fn assertion_algorithms(config: Config) -> List(String) {
   case config.authentication {
-    ClientSecretJwt(_) -> ["HS256", "HS384", "HS512"]
+    // Only the algorithms the secret is long enough for.
+    ClientSecretJwt(secret) ->
+      list.filter(["HS256", "HS384", "HS512"], fn(algorithm) {
+        string.byte_size(secret.reveal()) >= hmac_key_bytes(algorithm)
+      })
     PrivateKeyJwt(key) -> key.algorithms
     _ -> []
   }
