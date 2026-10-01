@@ -10,13 +10,25 @@ classifies failures. These duties remain with the application.
   `Secure`, `Path=/`, and `SameSite=Lax` for query responses. Form-post
   responses arrive as cross-site POSTs, so the binding cookie then needs
   `SameSite=None; Secure`.
+- Set `Secure` unconditionally, not from the request scheme: behind a
+  TLS-terminating proxy the application sees plain HTTP. Name the binding
+  and session cookies with the `__Host-` prefix (no `Domain`, `Path=/`), so
+  a sibling subdomain cannot plant its own binding and log the user in as
+  someone else.
 - Give the binding cookie a lifetime longer than the login lifetime, so an
   expired login is reported as `LoginExpired` instead of
   `BrowserBindingMissing`. Reuse an existing binding for new logins from the
   same browser, so concurrent tabs stay bound (see
   `consumer/src/warden_reference/web.gleam`).
 - `warden.session_reference(session)` is a bearer value. Keep it in a
-  signed or encrypted `HttpOnly` cookie or a server-side session.
+  signed or encrypted `HttpOnly` cookie or a server-side session, and
+  enforce the session lifetime on the server (the reference app signs the
+  issue time into the cookie); a browser `Max-Age` is not a limit.
+- Protect state-changing routes (refresh, logout) against cross-site
+  requests, for example by requiring `Sec-Fetch-Site: same-origin` or a
+  matching `Origin`.
+- Send `Cache-Control: no-store` on pages with personal data and on callback
+  responses, and forbid framing (`frame-ancestors 'none'`).
 
 ## Sessions and storage
 
@@ -28,7 +40,11 @@ classifies failures. These duties remain with the application.
   replay.
 - Session expiry is application policy. Warden exposes token expiry
   (`session_access_token` returns it) and refresh; it does not end sessions
-  on its own.
+  on its own, and custody entries stay in memory until `logout`. Call
+  `logout` when a session expires or is abandoned.
+- Rate-limit login starts (`begin_login`) per client address. The pending
+  login store is bounded (`max_pending_logins`); a sustained flood of
+  unauthenticated login starts can still keep it full.
 - Call `logout` to remove custody before redirecting to the provider. With
   `NoEndSessionEndpoint`, the provider session remains and the application
   decides how to inform the user.
@@ -55,6 +71,7 @@ classifies failures. These duties remain with the application.
   Warden reads them only where it authenticates to the provider.
 - Trust anchors: production uses `SystemTrust`. `AllowLoopbackForTesting`
   and custom trust anchors are for local test providers. Use
-  `allowed_hosts` when the provider's hosts are known.
+  `allowed_hosts` when the provider's hosts are known; it restricts host
+  names, not ports. Warden does not check certificate revocation.
 - Clock: Warden validates `exp`/`nbf` with zero clock skew against the node
   clock; keep hosts synchronised.

@@ -97,11 +97,12 @@ Suites: `fast` (`scripts/check`), `keycloak`, `node`, `interop`
 
 ## External oracles
 
-| Gate                | Evidence                                                                              | Result                                            |
-| ------------------- | ------------------------------------------------------------------------------------- | ------------------------------------------------- |
-| V2 OIDF conformance | [conformance results](evidence/conformance/)                                          | see PROGRESS; run under the non-default D7 opt-in |
-| V3 JOSE             | panva/jose 6.2.12 corpus (21 tokens) and assertion verification (HS256, ES256, RS256) | pass                                              |
-| V4 Differential     | 22 scenarios raw oidcc (test-only oracle) vs Warden, separate transactions            | agree except 2 documented W rows                  |
-| V5 Interop          | Keycloak 26.7.5, node-oidc-provider 9.12.2, Dex v2.45.1, Hydra v26.2.0                | pass                                              |
-| V5 Browser          | Chrome 154, 9 scenarios                                                               | pass                                              |
-| V6 Operational      | worker crash/restart, rotation, bounds, atoms, processes                              | pass                                              |
+| Gate                | Evidence                                                                                             | Result                                                                          |
+| ------------------- | ---------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------- |
+| V2 OIDF conformance | [conformance results](evidence/conformance/)                                                         | see PROGRESS; run under the non-default D7 opt-in                               |
+| V3 JOSE             | panva/jose 6.2.12 corpus (21 tokens) and assertion verification (HS256, ES256, RS256)                | pass                                                                            |
+| V4 Differential     | 22 scenarios raw oidcc (test-only oracle) vs Warden, separate transactions                           | agree except 2 documented W rows                                                |
+| V5 Interop          | Keycloak 26.7.5, node-oidc-provider 9.12.2, Dex v2.45.1, Hydra v26.2.0                               | pass                                                                            |
+| V5 Browser          | Chrome 154, 9 scenarios                                                                              | pass                                                                            |
+| V6 Operational      | worker crash/restart, rotation, bounds, atoms, processes                                             | pass                                                                            |
+| Internal review     | [SECURITY-REVIEW.md](SECURITY-REVIEW.md): 4 areas, every finding reproduced by a test before its fix | all high and medium fixed except F2 (owner decision); not an independent review |

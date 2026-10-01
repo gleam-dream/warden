@@ -5,7 +5,7 @@
   "summary": [
     {
       "module": "oidcc-client-test",
-      "id": "2AIgdulm0WwK6Ac",
+      "id": "zk8oF5O1H7nz1CX",
       "status": "FINISHED",
       "result": "PASSED",
       "notes": ["login → 200 /"],
@@ -13,7 +13,7 @@
     },
     {
       "module": "oidcc-client-test-invalid-iss",
-      "id": "fXSF76pMWV6OmSJ",
+      "id": "BIF7SKxed9FqtDx",
       "status": "FINISHED",
       "result": "PASSED",
       "notes": ["login → 401 /callback"],
@@ -21,7 +21,7 @@
     },
     {
       "module": "oidcc-client-test-missing-sub",
-      "id": "jp0p9QtJfQZQSRG",
+      "id": "UIQCPUC3G7xRg7t",
       "status": "FINISHED",
       "result": "PASSED",
       "notes": ["login → 401 /callback"],
@@ -29,7 +29,7 @@
     },
     {
       "module": "oidcc-client-test-invalid-aud",
-      "id": "fFeyEImlkkH06O1",
+      "id": "OSdFOzpN0L0DyM0",
       "status": "FINISHED",
       "result": "PASSED",
       "notes": ["login → 401 /callback"],
@@ -37,7 +37,7 @@
     },
     {
       "module": "oidcc-client-test-missing-iat",
-      "id": "uhdNM8hej82fPCQ",
+      "id": "sPn59SpE7nEqWiR",
       "status": "FINISHED",
       "result": "PASSED",
       "notes": ["login → 401 /callback"],
@@ -45,7 +45,7 @@
     },
     {
       "module": "oidcc-client-test-kid-absent-single-jwks",
-      "id": "2GBAlb47q9yYbqd",
+      "id": "KrlBLfZO8gG5yCl",
       "status": "FINISHED",
       "result": "PASSED",
       "notes": ["login → 200 /"],
@@ -53,7 +53,7 @@
     },
     {
       "module": "oidcc-client-test-kid-absent-multiple-jwks",
-      "id": "ikWCaZv0U8RugD8",
+      "id": "WQmJuE0zBNceCNe",
       "status": "FINISHED",
       "result": "PASSED",
       "notes": ["login → 200 /"],
@@ -61,7 +61,7 @@
     },
     {
       "module": "oidcc-client-test-idtoken-sig-rs256",
-      "id": "09eicfANaqZOdyd",
+      "id": "c0Tij5eBRTpvJeS",
       "status": "FINISHED",
       "result": "PASSED",
       "notes": ["login → 200 /"],
@@ -69,7 +69,7 @@
     },
     {
       "module": "oidcc-client-test-idtoken-sig-none",
-      "id": "IdeJ0gj8Sf6ZemC",
+      "id": "qAG2VrDs3eUqi2l",
       "status": "FINISHED",
       "result": "SKIPPED",
       "notes": ["login → 401 /callback"],
@@ -77,7 +77,7 @@
     },
     {
       "module": "oidcc-client-test-invalid-sig-rs256",
-      "id": "FsnMbMuQoezvcn5",
+      "id": "ZNX286RYHzuKqKd",
       "status": "FINISHED",
       "result": "PASSED",
       "notes": ["login → 401 /callback"],
@@ -85,7 +85,7 @@
     },
     {
       "module": "oidcc-client-test-userinfo-invalid-sub",
-      "id": "Oe1fLf8Pxa4x62A",
+      "id": "LWW0YKgOuHXZZjn",
       "status": "FINISHED",
       "result": "PASSED",
       "notes": ["login → 400 /callback"],
@@ -93,7 +93,7 @@
     },
     {
       "module": "oidcc-client-test-nonce-invalid",
-      "id": "F6vRobbauRMRLoR",
+      "id": "63AZx8Hxv9uCwB3",
       "status": "FINISHED",
       "result": "PASSED",
       "notes": ["login → 401 /callback"],
@@ -101,7 +101,7 @@
     },
     {
       "module": "oidcc-client-test-scope-userinfo-claims",
-      "id": "YaD5JGojwjEU72U",
+      "id": "jZ2QpkDmxuvW9iv",
       "status": "FINISHED",
       "result": "PASSED",
       "notes": ["login → 200 /"],
@@ -109,7 +109,7 @@
     },
     {
       "module": "oidcc-client-test-client-secret-basic",
-      "id": "gq02DBrq0xVwKRl",
+      "id": "qFEjxrVXCON012j",
       "status": "FINISHED",
       "result": "PASSED",
       "notes": ["login → 200 /"],
@@ -117,7 +117,7 @@
     },
     {
       "module": "oidcc-client-test",
-      "id": "McVrXbu57Xv9htV",
+      "id": "mHdxpCC4jHv5yUR",
       "status": "FINISHED",
       "result": "PASSED",
       "notes": ["login → 200 /"],
@@ -125,7 +125,7 @@
     },
     {
       "module": "oidcc-client-test-invalid-iss",
-      "id": "lG6zP2ZYw0xpyuq",
+      "id": "u9N32cyKi3dlZzL",
       "status": "FINISHED",
       "result": "PASSED",
       "notes": ["login → 401 /callback"],
@@ -133,7 +133,7 @@
     },
     {
       "module": "oidcc-client-test-missing-sub",
-      "id": "LMdtRNR2gPtZblt",
+      "id": "vROzWWxqn9Wb8Uh",
       "status": "FINISHED",
       "result": "PASSED",
       "notes": ["login → 401 /callback"],
@@ -141,7 +141,7 @@
     },
     {
       "module": "oidcc-client-test-invalid-aud",
-      "id": "Kf0iC06KFTSWkZz",
+      "id": "Sa6vkMYzXPAy9zK",
       "status": "FINISHED",
       "result": "PASSED",
       "notes": ["login → 401 /callback"],
@@ -149,7 +149,7 @@
     },
     {
       "module": "oidcc-client-test-missing-iat",
-      "id": "xTupGGFi2Gb2KqC",
+      "id": "GMlI92ohkDAERBP",
       "status": "FINISHED",
       "result": "PASSED",
       "notes": ["login → 401 /callback"],
@@ -157,7 +157,7 @@
     },
     {
       "module": "oidcc-client-test-kid-absent-single-jwks",
-      "id": "C5NYmKx56cPcPXE",
+      "id": "k8NXxSxfm6A1sI2",
       "status": "FINISHED",
       "result": "PASSED",
       "notes": ["login → 200 /"],
@@ -165,7 +165,7 @@
     },
     {
       "module": "oidcc-client-test-kid-absent-multiple-jwks",
-      "id": "yRPipOQ2z51Z9LG",
+      "id": "RbfjujXRSjbyiHV",
       "status": "FINISHED",
       "result": "PASSED",
       "notes": ["login → 200 /"],
@@ -173,7 +173,7 @@
     },
     {
       "module": "oidcc-client-test-idtoken-sig-rs256",
-      "id": "fM9B6qrFTeMxaFo",
+      "id": "TsmYLTLwn1vl76A",
       "status": "FINISHED",
       "result": "PASSED",
       "notes": ["login → 200 /"],
@@ -181,7 +181,7 @@
     },
     {
       "module": "oidcc-client-test-idtoken-sig-none",
-      "id": "FfbZ781lHdCmnit",
+      "id": "TI9fquZhjY207k9",
       "status": "FINISHED",
       "result": "SKIPPED",
       "notes": ["login → 401 /callback"],
@@ -189,7 +189,7 @@
     },
     {
       "module": "oidcc-client-test-invalid-sig-rs256",
-      "id": "tYROFEXY3x8omBg",
+      "id": "3JkAHIRzC6YPMgp",
       "status": "FINISHED",
       "result": "PASSED",
       "notes": ["login → 401 /callback"],
@@ -197,7 +197,7 @@
     },
     {
       "module": "oidcc-client-test-userinfo-invalid-sub",
-      "id": "9DXBh6BS2mATKvn",
+      "id": "KAKEgPoWJdAAAM3",
       "status": "FINISHED",
       "result": "PASSED",
       "notes": ["login → 400 /callback"],
@@ -205,7 +205,7 @@
     },
     {
       "module": "oidcc-client-test-nonce-invalid",
-      "id": "2G0s6HHOgS5GH6w",
+      "id": "iRvxRvS7jgb4HCG",
       "status": "FINISHED",
       "result": "PASSED",
       "notes": ["login → 401 /callback"],
@@ -213,7 +213,7 @@
     },
     {
       "module": "oidcc-client-test-scope-userinfo-claims",
-      "id": "7bsbMMnzhDWAtKe",
+      "id": "BWayZ1yHhHyQpyu",
       "status": "FINISHED",
       "result": "PASSED",
       "notes": ["login → 200 /"],
@@ -221,7 +221,7 @@
     },
     {
       "module": "oidcc-client-test-client-secret-basic",
-      "id": "erQsrGfvpyI78dU",
+      "id": "2WhDl5JHA0Vzn5f",
       "status": "FINISHED",
       "result": "PASSED",
       "notes": ["login → 200 /"],
@@ -229,7 +229,7 @@
     },
     {
       "module": "oidcc-client-test-discovery-openid-config",
-      "id": "WJqy1oSVhAx7y0o",
+      "id": "ZQAPsXusS09AXDa",
       "status": "FINISHED",
       "result": "PASSED",
       "notes": ["module finished during RP startup"],
@@ -237,7 +237,7 @@
     },
     {
       "module": "oidcc-client-test-discovery-jwks-uri-keys",
-      "id": "yd9Yx0x3LhfvMdk",
+      "id": "dSdvsBI3yUBrx8m",
       "status": "FINISHED",
       "result": "PASSED",
       "notes": ["module finished during RP startup"],
@@ -245,7 +245,7 @@
     },
     {
       "module": "oidcc-client-test-discovery-issuer-mismatch",
-      "id": "6od41hpYHEqWGD6",
+      "id": "oiYT7An2mTPhIiE",
       "status": "FINISHED",
       "result": "PASSED",
       "notes": [
@@ -255,7 +255,7 @@
     },
     {
       "module": "oidcc-client-test-idtoken-sig-none",
-      "id": "R0QxuOOe0pYHX4y",
+      "id": "KXsAxhpkSYnUxHE",
       "status": "FINISHED",
       "result": "SKIPPED",
       "notes": ["login → 401 /callback"],
@@ -263,7 +263,7 @@
     },
     {
       "module": "oidcc-client-test-signing-key-rotation-just-before-signing",
-      "id": "gHRpFqodS4JOVjY",
+      "id": "mmNnaQuIVux3Ojj",
       "status": "FINISHED",
       "result": "PASSED",
       "notes": ["login → 200 /"],
@@ -271,7 +271,7 @@
     },
     {
       "module": "oidcc-client-test-signing-key-rotation",
-      "id": "0mNNlIgozcgnuvn",
+      "id": "mTgvAFYxBQnsRJW",
       "status": "FINISHED",
       "result": "PASSED",
       "notes": ["login → 200 /", "second login → 200 /"],
@@ -279,7 +279,7 @@
     },
     {
       "module": "oidcc-client-test-3rd-party-init-login",
-      "id": "UCtMC6l5itDon8N",
+      "id": "Q3hBQuV3bhJlKsY",
       "status": "INTERRUPTED",
       "result": "FAILED",
       "notes": [
@@ -289,7 +289,7 @@
     },
     {
       "module": "oidcc-client-test-refresh-token",
-      "id": "uEo1HrZmjLTJ5nb",
+      "id": "5drvK65MyMhLt5E",
       "status": "FINISHED",
       "result": "PASSED",
       "notes": ["login → 200 /", "refresh → completed"],
@@ -297,7 +297,7 @@
     },
     {
       "module": "oidcc-client-test-refresh-token-invalid-issuer",
-      "id": "mpCG82sMU3MgCnk",
+      "id": "zrqbL1JXG9Q0TWn",
       "status": "FINISHED",
       "result": "PASSED",
       "notes": ["login → 200 /", "refresh → quarantined"],
@@ -305,7 +305,7 @@
     },
     {
       "module": "oidcc-client-test-refresh-token-invalid-sub",
-      "id": "cqEMeeFmdqIS8e5",
+      "id": "QncI8p9WCeJtMVl",
       "status": "FINISHED",
       "result": "PASSED",
       "notes": ["login → 200 /", "refresh → quarantined"],
@@ -313,7 +313,7 @@
     },
     {
       "module": "oidcc-client-test-rp-init-logout",
-      "id": "sfWvy7nnYopPiSD",
+      "id": "R1VRJUp9SNqL4Nz",
       "status": "FINISHED",
       "result": "REVIEW",
       "notes": [
@@ -325,7 +325,7 @@
     },
     {
       "module": "oidcc-client-test-rp-init-logout-other-state",
-      "id": "EEP2CqqSSxO9TA0",
+      "id": "Xc4vTysXIklvubW",
       "status": "FINISHED",
       "result": "REVIEW",
       "notes": [
@@ -337,7 +337,7 @@
     },
     {
       "module": "oidcc-client-test-rp-init-logout-no-state",
-      "id": "MhPN9ePuAoi51zI",
+      "id": "YjBgOUr2vEPFFt6",
       "status": "FINISHED",
       "result": "REVIEW",
       "notes": [

@@ -31,7 +31,7 @@ before relying on conversation history. Closed-wave entries are append-only.
 
 ## Current state
 
-- Waves W0–W9 executed (2026-09-30 to 2026-10-01). Branch
+- Waves W0–W10 executed (2026-09-30 to 2026-10-01). Branch
   `warden-implementation` (local, not pushed). Repository private; no release
   published.
 - One backend: Gleam-native on gose 2.2.0 + kryptos 1.5.0 with Warden's
@@ -42,7 +42,7 @@ before relying on conversation history. Closed-wave entries are append-only.
 
 | Suite                                         | Command                                                  | Result                                                                                        |
 | --------------------------------------------- | -------------------------------------------------------- | --------------------------------------------------------------------------------------------- |
-| Fast gate                                     | `nix develop -c scripts/check`                           | 72 pass; 13 negative compile cases + positive control; consumer 4 pass                        |
+| Fast gate                                     | `nix develop -c scripts/check`                           | 107 pass; 13 negative compile cases + positive control; consumer 8 pass                       |
 | Keycloak 26.7.5                               | `scripts/keycloak up; WARDEN_SUITE=keycloak gleam test`  | 15 pass (includes raw-oidcc probe P1)                                                         |
 | node-oidc-provider 9.12.2 + panva/jose 6.2.12 | `scripts/node-provider up; WARDEN_SUITE=node gleam test` | 7 pass (21-token corpus, 5 client-auth methods, 22-scenario raw-oidcc differential, probe P3) |
 | Dex v2.45.1, Ory Hydra v26.2.0                | `scripts/interop up; WARDEN_SUITE=interop gleam test`    | 2 pass                                                                                        |
@@ -54,7 +54,11 @@ before relying on conversation history. Closed-wave entries are append-only.
   (D7), because the suite's OP omits PKCE metadata. SKIPPED (`alg: none`
   refused), REVIEW (front-channel logout) and the suite defect are not passes.
   The removed oidcc backend's runs are kept under `evidence/**/history/`.
-- No open owner decisions. See [decisions.md](decisions.md).
+- Internal security review done (W10): 2 high, 12 medium and about 30
+  low findings; all high and medium fixed except F2, which needs a
+  decision. See [SECURITY-REVIEW.md](SECURITY-REVIEW.md).
+- Open owner decisions: **F2** (custody lifetime and capacity) and **J3**
+  (clock-skew tolerance), in [SECURITY-REVIEW.md](SECURITY-REVIEW.md).
 
 ## Wave map
 
@@ -70,6 +74,7 @@ before relying on conversation history. Closed-wave entries are append-only.
 | W7   | Hydra/Dex interoperability, operational gates                         | Versions, results, remaining gaps                        |
 | W8   | Native backend (D10), Gleam transport (D11), sinal observations (D12) | Every suite on both backends; default switched           |
 | W9   | PKCE opt-in (D7); oidcc backend removed (D13)                         | Every suite on the single backend                        |
+| W10  | Internal security review and fixes                                    | [SECURITY-REVIEW.md](SECURITY-REVIEW.md); every suite    |
 
 ## Decision register
 
@@ -202,10 +207,29 @@ See [decisions.md](decisions.md).
 - Distance to target: design release gates (V0 SBOM/changelog review,
   independent security review), sinal and gose releases, durable stores.
 
+### W10 — internal security review (closed 2026-10-01)
+
+- Four parallel read-only reviewers (transport; token verification; login
+  and custody; config, secrets and reference app). Every finding was
+  reproduced with a failing test before its fix; 16 fix commits
+  (`b7a88ca`..`061595d`). Record: [SECURITY-REVIEW.md](SECURITY-REVIEW.md).
+- Highs: IP-literal TLS name check disabled (T1); client credentials in
+  inspected values (C1); pending-login store flood (F1).
+- New internal modules: `redacted` (closure-held secrets), `key_policy`
+  (RSA ≥ 2048, Ed25519 only, signing purpose), `fifo`. The call proxy drops
+  late replies; the provider cache fetches in the background; custody
+  monitors refresh dispatchers and bounds installation replays.
+- Reference app: `__Host-` cookies, always `Secure`, same-origin POSTs,
+  server-enforced session lifetime, security headers.
+- Deferred: F9 (monotonic login lifetimes), J10 (key refresh on
+  `bad_signature` with an unmatched kid); accepted: T5 (close-delimited
+  truncation). Open decisions: F2, J3.
+
 ## Remaining limitations and gaps
 
 - Production readiness requires the design's release gates and an
-  independent security review of Warden-owned code (transport, protocol and
+  independent security review of Warden-owned code (an internal review,
+  W10, is not a substitute) (transport, protocol and
   claim rules, stores); none has been performed. Warden owns more of the
   protocol surface than an oidcc wrapper would. Not certified.
 - In-memory stores only: no durable custody, no multi-node replay authority.
