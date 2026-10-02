@@ -1,6 +1,9 @@
 # Supply chain (gate V0)
 
-Runtime dependencies (what an application using Warden installs):
+Runtime dependencies (what an application using Warden installs). Warden
+declares major-bounded ranges (D18); the versions below are the evidence
+versions, which are also the declared lower bounds and the versions
+`manifest.toml` locks:
 
 | Package                                              | Version                           | Licence     | Source evidence                                                                                          | Advisories                                                               |
 | ---------------------------------------------------- | --------------------------------- | ----------- | -------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------ |

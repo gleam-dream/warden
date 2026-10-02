@@ -12,19 +12,23 @@ gleam_stdlib = ">= 0.70.0 and < 2.0.0"
 gleam_erlang = ">= 1.0.0 and < 2.0.0"
 gleam_otp = ">= 1.0.0 and < 2.0.0"
 gleam_json = ">= 3.0.0 and < 4.0.0"
-telemetry = "== 1.4.2"
-exception = "== 2.1.1"
-gleam_crypto = "== 1.6.0"
-gleam_time = "== 1.11.0"
-gose = "== 2.2.0"
-kryptos = "== 1.5.0"
+telemetry = ">= 1.4.2 and < 2.0.0"
+exception = ">= 2.1.1 and < 3.0.0"
+gleam_crypto = ">= 1.6.0 and < 2.0.0"
+gleam_time = ">= 1.11.0 and < 2.0.0"
+# Cryptographic backend (D10, D18). Warden uses only public gose and kryptos
+# APIs. The lower bounds are the versions the security evidence was recorded
+# on (docs/SUPPLY-CHAIN.md); a newer resolved version must pass the suites.
+gose = ">= 2.2.0 and < 3.0.0"
+kryptos = ">= 1.5.0 and < 2.0.0"
 sinal = { path = "../sinal" }
 http_gun = { path = "../http_gun" }
 gleam_http = ">= 4.4.0 and < 5.0.0"
 
 [dev-dependencies]
-# Test-only oracles: raw oidcc for the differential and probes (design V4),
-# erlang-jose for the scripted provider's token signing.
+# Test-only oracles, pinned to the versions the evidence names: raw oidcc
+# for the differential and probes (design V4, D1), erlang-jose for the
+# scripted provider's token signing, telemetry_registry for oidcc.
 oidcc = "== 3.9.0"
 jose = "== 1.11.12"
 telemetry_registry = "== 0.3.2"

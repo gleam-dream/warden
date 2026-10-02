@@ -282,8 +282,8 @@ cache with the result. The text below describes the removed oidcc path.
   `../sinal`) until the owner publishes all packages "once all systems are
   working smoothly". This relaxes D11's "released version" gate for
   development; Warden cannot be published while path dependencies remain.
-- Revisit: when HTTP Gun and Sinal are published, pin exact versions and
-  rerun every suite.
+- Revisit: when HTTP Gun and Sinal are published, declare major-bounded
+  ranges (D18) and rerun every suite.
 
 ## D17 — Coarser transport classes accepted (owner decision, 2026-10-01)
 
@@ -298,3 +298,34 @@ cache with the result. The text below describes the removed oidcc path.
   connection, so nothing reaches another request.
 - Security is unchanged: every malformed response is still refused or
   confined to its own connection; only diagnostic precision is lower.
+
+## D18 — Major-bounded dependency ranges (2026-10-02)
+
+- Cross-package review finding SMCP-1: the exact pins `gleam_crypto == 1.6.0`,
+  `gleam_time == 1.11.0`, `exception == 2.1.1`, `telemetry == 1.4.2`,
+  `gose == 2.2.0` and `kryptos == 1.5.0` stopped applications from resolving
+  Warden together with sibling packages (`gleam_crypto` 1.6.0 needs
+  `gleam_stdlib >= 1.0`). A library's exact pins become every
+  application's pins.
+- Decision: each runtime Hex dependency is `>= <evidence version> and
+< <next major>.0.0`. Warden uses only public APIs of every dependency (no
+  FFI against private records or modules), so no exact pin remains.
+  `telemetry` matches sinal, which wraps only public `:telemetry` calls.
+  This revises D10's "both need pinning" and D16's "pin exact versions".
+- gose and kryptos: the lower bounds are the versions the security evidence
+  was recorded on (D7, D10 parity, D11, D13, conformance and interop runs):
+  gose 2.2.0, kryptos 1.5.0. `manifest.toml` still locks the versions
+  Warden is tested with. A gose or kryptos version newer than the evidence
+  version needs the fast, provider and conformance suites rerun before it
+  is recorded in [SUPPLY-CHAIN.md](SUPPLY-CHAIN.md); D10's X.509-member
+  stripping and exact-audience rule stay in Warden whatever gose does.
+- Test-only oracles (`oidcc == 3.9.0`, `jose == 1.11.12`,
+  `telemetry_registry == 0.3.2`) stay pinned: they are not installed by
+  applications and the differential evidence names those versions.
+- The reference RP (`consumer/`) uses ranges for `wisp` and `mist` too.
+- Evidence: fast gate (suite, negative compile tests, consumer) passes on the
+  resolved manifest, which still selects gose 2.2.0, kryptos 1.5.0,
+  gleam_crypto 1.6.0, gleam_time 1.11.0, exception 2.1.1, telemetry 1.4.2 and
+  gleam_stdlib 1.0.5 (the newest allowed).
+- Revisit: a new gose or kryptos major, or an advisory against a version the
+  range admits (raise the lower bound).
