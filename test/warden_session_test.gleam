@@ -341,6 +341,39 @@ pub fn logout_removes_custody_then_redirects_test() {
   support.provider_stop(provider)
 }
 
+/// SSO-4: request A holds revision 1 while request B refreshes the session to
+/// revision 2. A's logout still ends the session, with the latest ID token
+/// as the hint; a second logout reports that no session existed.
+pub fn logout_with_a_stale_revision_ends_the_session_test() {
+  let provider = support.provider_start(support.Standard)
+  let client = start(settings(provider))
+  let session = logged_in(provider, client)
+  let assert Ok(warden.RefreshCompleted(refreshed)) =
+    warden.refresh_session(client, session)
+  assert warden.session_revision(refreshed) == 2
+  let assert Error(warden.SessionStale) =
+    warden.session_access_token(client, session)
+  let assert Ok(warden.RedirectToProvider(url)) =
+    warden.logout(
+      client,
+      session,
+      warden.LogoutOptions(post_logout_redirect_uri: None, state: None),
+    )
+  assert string.contains(url, "id_token_hint=")
+  let assert Error(warden.SessionNotFound) =
+    warden.restore_session(client, warden.session_reference(session))
+  let assert Error(warden.RefreshSessionMissing) =
+    warden.refresh_session(client, refreshed)
+  let assert Error(warden.LogoutSession(warden.SessionNotFound)) =
+    warden.logout(
+      client,
+      refreshed,
+      warden.LogoutOptions(post_logout_redirect_uri: None, state: None),
+    )
+  warden.stop(client)
+  support.provider_stop(provider)
+}
+
 pub fn logout_without_end_session_endpoint_is_explicit_test() {
   let provider = support.provider_start(support.NoEndSession)
   let client = start(settings(provider))

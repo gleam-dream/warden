@@ -77,13 +77,13 @@ Suites: `fast` (`scripts/check`), `keycloak`, `node`, `interop`
 
 ## Remaining operations
 
-| #   | Requirement                                                                        | Kind | Component                                     | Test                                                                            | Result |
-| --- | ---------------------------------------------------------------------------------- | ---- | --------------------------------------------- | ------------------------------------------------------------------------------- | ------ |
-| O1  | Userinfo requires subject continuity                                               | N    | `warden.userinfo`                             | `userinfo_requires_subject_continuity_test`, conformance `userinfo-invalid-sub` | pass   |
-| O2  | Client credentials typed, independent of identity                                  | N    | `warden.client_credentials`                   | fast, Keycloak, Hydra                                                           | pass   |
-| O3  | Introspection: active / inactive / failure / unsupported distinct                  | W    | `warden.introspect`                           | fast, Keycloak, Hydra (`IntrospectionNotSupported`)                             | pass   |
-| O4  | RP logout: custody removed first; hint, redirect, state; missing endpoint explicit | N    | `warden.logout`                               | fast, Keycloak (provider session ended), Dex (`NoEndSessionEndpoint`), browser  | pass   |
-| O5  | Client auth: basic, post, secret JWT, private key JWT (RS256, ES256), public       | N    | `native/client`, `native/jose` (gose signing) | node `client_authentication_methods_test` (assertions verified by panva/jose)   | pass   |
+| #   | Requirement                                                                                                            | Kind | Component                                     | Test                                                                                                                                  | Result |
+| --- | ---------------------------------------------------------------------------------------------------------------------- | ---- | --------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- | ------ |
+| O1  | Userinfo requires subject continuity                                                                                   | N    | `warden.userinfo`                             | `userinfo_requires_subject_continuity_test`, conformance `userinfo-invalid-sub`                                                       | pass   |
+| O2  | Client credentials typed, independent of identity                                                                      | N    | `warden.client_credentials`                   | fast, Keycloak, Hydra                                                                                                                 | pass   |
+| O3  | Introspection: active / inactive / failure / unsupported distinct                                                      | W    | `warden.introspect`                           | fast, Keycloak, Hydra (`IntrospectionNotSupported`)                                                                                   | pass   |
+| O4  | RP logout: custody removed first, by reference whatever the revision; hint, redirect, state; missing endpoint explicit | N    | `warden.logout`                               | fast (`logout_with_a_stale_revision_ends_the_session_test`), Keycloak (provider session ended), Dex (`NoEndSessionEndpoint`), browser | pass   |
+| O5  | Client auth: basic, post, secret JWT, private key JWT (RS256, ES256), public                                           | N    | `native/client`, `native/jose` (gose signing) | node `client_authentication_methods_test` (assertions verified by panva/jose)                                                         | pass   |
 
 ## Transport and redaction
 

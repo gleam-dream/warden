@@ -141,6 +141,18 @@ pub type PublishReply {
   PublishRejected
 }
 
+/// The outcome of removing a session by reference. Removal ignores the
+/// revision: a session ends whatever refreshes happened since it was read.
+pub type Removal(identity) {
+  /// The session was live and is now removed; its last snapshot.
+  Removed(Snapshot(identity))
+  /// No live session had that reference (unknown, already removed or
+  /// expired; an expired entry is evicted).
+  RemovalMissing
+  /// The session belongs to another provider configuration; it is kept.
+  RemovalForeign
+}
+
 pub type SettleReply {
   Settled
   SettleMismatch
@@ -190,7 +202,7 @@ pub opaque type Message(identity) {
     reply: Subject(SettleReply),
   )
   PublishMsg(Publish, Subject(PublishReply))
-  RemoveMsg(String, Subject(Nil))
+  RemoveMsg(String, String, Subject(Removal(identity)))
   HolderDown(process.Down)
   SweepMsg(Subject(Nil))
   SweepTick(Subject(Message(identity)))
@@ -373,9 +385,24 @@ fn handle(
       reply(state, DelayPublish, subject, result)
       actor.continue(state)
     }
-    RemoveMsg(reference, subject) -> {
-      let state = State(..state, entries: dict.delete(state.entries, reference))
-      reply(state, DelayNothing, subject, Nil)
+    RemoveMsg(reference, provider, subject) -> {
+      let state = use_entry(state, reference)
+      let #(result, state) = case dict.get(state.entries, reference) {
+        Error(Nil) -> #(RemovalMissing, state)
+        Ok(entry) if entry.provider != provider -> #(RemovalForeign, state)
+        Ok(entry) -> #(
+          Removed(Snapshot(
+            reference:,
+            provider: entry.provider,
+            identity: entry.identity,
+            evidence: entry.evidence,
+            tokens: entry.tokens,
+            revision: entry.revision,
+          )),
+          State(..state, entries: dict.delete(state.entries, reference)),
+        )
+      }
+      reply(state, DelayNothing, subject, result)
       actor.continue(state)
     }
     HolderDown(down) -> actor.continue(orphan(state, down))
@@ -703,11 +730,14 @@ pub fn publish_refresh(
   call.call(store.subject, store.timeout, PublishMsg(command, _))
 }
 
+/// Remove a session by reference, regardless of its revision, in one step
+/// of the custody owner, returning the snapshot it held.
 pub fn remove(
   store: Store(identity),
   reference: String,
-) -> Result(Nil, CallError) {
-  call.call(store.subject, store.timeout, RemoveMsg(reference, _))
+  provider: String,
+) -> Result(Removal(identity), CallError) {
+  call.call(store.subject, store.timeout, RemoveMsg(reference, provider, _))
 }
 
 /// Test support: delay replies of one kind by `delay` milliseconds after the

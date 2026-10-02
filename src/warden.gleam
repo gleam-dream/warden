@@ -1983,6 +1983,8 @@ pub type LogoutOutcome {
 }
 
 pub type LogoutError {
+  /// `SessionNotFound` (no live session with that reference) or
+  /// `SessionForeign`; never `SessionStale`.
   LogoutSession(SessionError)
   InvalidPostLogoutRedirect
   InvalidLogoutState
@@ -1993,6 +1995,13 @@ pub type LogoutError {
 
 /// End the session: remove its custody first, then build the provider
 /// logout URL with the logout-only ID-token hint.
+///
+/// The session is ended by its reference whatever its revision, so a
+/// `session` value made stale by a concurrent refresh still logs out; the
+/// hint is the latest ID token in custody. `LogoutSession(SessionNotFound)`
+/// reports that no live session had that reference (already logged out or
+/// expired), which callers may treat as signed out. A logout never returns
+/// `LogoutSession(SessionStale)`.
 pub fn logout(
   client: Client,
   session: Session,
@@ -2014,12 +2023,26 @@ pub fn logout(
       }
     None -> Ok(Nil)
   })
+  use _ <- result.try(case session.provider == client.provider {
+    True -> Ok(Nil)
+    False -> Error(LogoutSession(SessionForeign))
+  })
+  // Removal is by reference, not revision: a refresh that raced this logout
+  // must not keep the session alive. The removed snapshot carries the
+  // latest ID token for the hint.
   use snapshot <- result.try(
-    load_current(client, session) |> result.map_error(LogoutSession),
-  )
-  use _ <- result.try(
-    custody.remove(client.custody, redacted.reveal(session.reference))
-    |> result.replace_error(LogoutStoreUnavailable),
+    case
+      custody.remove(
+        client.custody,
+        redacted.reveal(session.reference),
+        client.provider,
+      )
+    {
+      Error(_) -> Error(LogoutStoreUnavailable)
+      Ok(custody.RemovalMissing) -> Error(LogoutSession(SessionNotFound))
+      Ok(custody.RemovalForeign) -> Error(LogoutSession(SessionForeign))
+      Ok(custody.Removed(snapshot)) -> Ok(snapshot)
+    },
   )
   use metadata <- result.try(
     native.metadata(client.backend)

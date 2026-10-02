@@ -47,7 +47,10 @@ classifies failures. These duties remain with the application.
   unauthenticated login starts can still keep it full.
 - Call `logout` to remove custody before redirecting to the provider. With
   `NoEndSessionEndpoint`, the provider session remains and the application
-  decides how to inform the user.
+  decides how to inform the user. Logout ends the session by reference
+  whatever its revision, so a session value made stale by a concurrent
+  refresh still signs out; `LogoutSession(SessionNotFound)` means no live
+  session remained (already logged out or expired).
 
 ## Failure handling
 

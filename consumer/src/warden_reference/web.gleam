@@ -382,6 +382,9 @@ fn logout(request: Request, context: Context) -> Response {
         Ok(warden.RedirectToProvider(url)) -> wisp.redirect(url) |> cleared
         Ok(warden.NoEndSessionEndpoint) ->
           wisp.redirect("/logged-out") |> cleared
+        // Already ended (another tab's logout, or expiry): signed out.
+        Error(warden.LogoutSession(warden.SessionNotFound)) ->
+          wisp.redirect("/logged-out") |> cleared
         Error(error) ->
           page(503, "Sign-out failed", escape(string.inspect(error)))
       }

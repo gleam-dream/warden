@@ -56,7 +56,13 @@ pub fn replay_after_removal_reports_the_session_ended_test() {
   // Replays before removal return the same receipt (idempotent).
   assert custody.install(store, command("a", 1))
     == Ok(custody.Installed(receipt))
-  let assert Ok(Nil) = custody.remove(store, receipt.reference)
+  let assert Ok(custody.RemovalForeign) =
+    custody.remove(store, receipt.reference, "other-provider")
+  let assert Ok(custody.Removed(snapshot)) =
+    custody.remove(store, receipt.reference, "provider")
+  assert snapshot.tokens.access_token == "at-a"
+  let assert Ok(custody.RemovalMissing) =
+    custody.remove(store, receipt.reference, "provider")
   assert custody.install(store, command("a", 1)) == Ok(custody.InstallEnded)
 }
 
