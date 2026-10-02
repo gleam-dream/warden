@@ -497,13 +497,11 @@ fn observe(
     Get -> observation.Get
     Post -> observation.Post
   }
-  let _ =
-    sinal.emit(
-      observation.http_request(),
-      observation.HttpMeasurements(duration_ms: monotonic_ms() - start),
-      observation.HttpRequest(method:, host:, path:, outcome:),
-    )
-  Nil
+  sinal.emit(
+    observation.http_request(),
+    observation.HttpMeasurements(duration_ms: monotonic_ms() - start),
+    observation.HttpRequest(method:, host:, path:, outcome:),
+  )
 }
 
 /// Closed snake_case name of a failure class (observations, failure mapping).

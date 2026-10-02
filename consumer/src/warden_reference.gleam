@@ -19,8 +19,6 @@
 //// | `PORT` | Listening port (default 18080) |
 
 import envoy
-import gleam/dynamic.{type Dynamic}
-import gleam/erlang/atom
 import gleam/erlang/process
 import gleam/int
 import gleam/io
@@ -127,12 +125,8 @@ pub fn main() -> Nil {
 /// One log line per outbound Warden request, from the typed observation
 /// event. The event holds no secrets, so it is safe to print whole.
 fn log_outbound_requests() -> Nil {
-  // Attaching needs the telemetry application running; before
-  // `warden.start` that is the application's job.
-  let assert True = start_telemetry()
-  let assert Ok(id) = sinal.handler_id("warden-reference-http")
-  let assert Ok(_) =
-    sinal.observe(id, observation.http_request(), fn(measurements, request) {
+  let _attachment =
+    sinal.observe(observation.http_request(), fn(measurements, request) {
       let outcome = case request.outcome {
         observation.Status(code) -> int.to_string(code)
         observation.Failed(sent: True, class:) -> "failed after send: " <> class
@@ -157,13 +151,3 @@ fn log_outbound_requests() -> Nil {
     })
   Nil
 }
-
-fn start_telemetry() -> Bool {
-  case ensure_all_started(atom.create("telemetry")) {
-    Ok(_) -> True
-    Error(_) -> False
-  }
-}
-
-@external(erlang, "application", "ensure_all_started")
-fn ensure_all_started(application: atom.Atom) -> Result(Dynamic, Dynamic)

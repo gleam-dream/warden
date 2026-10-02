@@ -222,7 +222,9 @@ cache with the result. The text below describes the removed oidcc path.
   running, instead of returning an `AttachError`. The reference RP starts
   `telemetry` itself before attaching (an application duty until sinal
   handles it). `sinal.emit` is unaffected: Warden starts `telemetry` with its
-  other applications before any request.
+  other applications before any request. Resolved in sinal `355b100`:
+  `attach`, `observe` and `with_subscriptions` start `telemetry`, so the
+  reference RP no longer starts it.
 - The native backend starts only `crypto`, `public_key`, `ssl` and
   `telemetry`; it no longer starts the oidcc application.
 
