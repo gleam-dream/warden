@@ -84,8 +84,9 @@ See [decisions.md](decisions.md).
 
 ## Open decisions
 
-- D7 — Keep requiring advertised S256 (RFC 9700 §2.1.1)? Conformance
-  evidence currently relies on an internal harness policy.
+None. D7 (PKCE S256 advertisement) was resolved on 2026-09-30 with the
+public opt-in `AssumeS256WhenUnadvertised`, and W9 replaced the internal
+conformance entry point with it; see [decisions.md](decisions.md#d7--pkce-s256-advertisement-resolved-2026-09-30-explicit-opt-in).
 
 ## Closed waves
 

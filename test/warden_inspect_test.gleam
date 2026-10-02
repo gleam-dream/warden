@@ -144,3 +144,71 @@ pub fn installation_recovery_does_not_inspect_tokens_test() {
   warden.stop(client)
   support.provider_stop(provider)
 }
+
+pub fn configuration_and_credentials_do_not_inspect_test() {
+  let provider = support.provider_start(support.Standard)
+  let jwk = support.client_private_jwk()
+  let assert Ok(d) = support.jwk_private_member(jwk)
+  let assert Ok(key) = config.signing_key_from_jwk(jwk)
+  let jwt_secret = "SENTINEL-JWT-SECRET-0123456789-abcdefghijklmnop"
+  let secrets = ["sentinel-secret", jwt_secret, d]
+  let configured = [
+    settings(provider),
+    config.Settings(
+      ..settings(provider),
+      authentication: config.ClientSecretPost(config.secret("sentinel-secret")),
+    ),
+    config.Settings(
+      ..settings(provider),
+      authentication: config.ClientSecretJwt(config.secret(jwt_secret)),
+    ),
+    config.Settings(
+      ..settings(provider),
+      authentication: config.PrivateKeyJwt(key),
+    ),
+  ]
+  list.each(configured, fn(settings) {
+    assert_hidden(settings, secrets)
+    let assert Ok(validated) = config.validate(settings)
+    assert_hidden(validated, secrets)
+  })
+  assert_hidden(#(config.secret("sentinel-secret"), key), secrets)
+  support.provider_stop(provider)
+}
+
+pub fn tokens_token_responses_and_introspection_do_not_inspect_test() {
+  let provider = support.provider_start(support.Standard)
+  let client = start(settings(provider))
+  let session = logged_in(provider, client)
+  let session_tokens = tokens_of(client, session)
+  let assert Ok(#(access, _) as access_result) =
+    warden.session_access_token(client, session)
+  let assert Ok(refreshed) = warden.refresh_session(client, session)
+  let assert warden.RefreshCompleted(refreshed_session) = refreshed
+  let assert Ok(client_token) = warden.client_credentials(client, ["api"])
+  let introspected = warden.introspect(client, "active-token")
+  let assert Ok(warden.ActiveToken(_)) = introspected
+  let inactive = warden.introspect(client, "SENTINEL-INACTIVE-TOKEN")
+  let assert Ok(warden.InactiveToken) = inactive
+  let secrets =
+    list.flatten([
+      ["sentinel-secret", "active-token", "SENTINEL-INACTIVE-TOKEN"],
+      [
+        warden.access_token_value(access),
+        warden.access_token_value(client_token.access_token),
+      ],
+      session_tokens,
+      tokens_of(client, refreshed_session),
+    ])
+  assert_hidden(
+    #(access, access_result, refreshed, client_token, introspected, inactive),
+    secrets,
+  )
+  support.provider_stop(provider)
+  let failed = warden.introspect(client, "active-token")
+  let assert Error(warden.IntrospectionFailed(_)) = failed
+  let denied = warden.client_credentials(client, ["api"])
+  let assert Error(_) = denied
+  assert_hidden(#(failed, denied), secrets)
+  warden.stop(client)
+}
