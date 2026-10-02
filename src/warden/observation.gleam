@@ -45,28 +45,19 @@ pub type Outcome {
 /// outcome => {status, Code} | {failure, not_sent | sent, Class}}` and the
 /// measurements are `#{duration_ms => Integer}`.
 pub fn http_request() -> sinal.Event(HttpMeasurements, HttpRequest) {
-  let measurements =
-    fields.record({
-      use duration_ms <- fields.parameter
-      HttpMeasurements(duration_ms:)
-    })
-    |> fields.and(fields.int("duration_ms"), fn(m: HttpMeasurements) {
+  let measurements = {
+    use duration_ms <- fields.include(fields.int("duration_ms"), get: fn(m) {
       m.duration_ms
     })
-    |> fields.build
-  let metadata =
-    fields.record({
-      use method <- fields.parameter
-      use host <- fields.parameter
-      use path <- fields.parameter
-      use outcome <- fields.parameter
-      HttpRequest(method:, host:, path:, outcome:)
-    })
-    |> fields.and(method_field(), fn(r: HttpRequest) { r.method })
-    |> fields.and(fields.string("host"), fn(r) { r.host })
-    |> fields.and(fields.string("path"), fn(r) { r.path })
-    |> fields.and(outcome_field(), fn(r) { r.outcome })
-    |> fields.build
+    fields.success(HttpMeasurements(duration_ms:))
+  }
+  let metadata = {
+    use method <- fields.include(method_field(), get: fn(r) { r.method })
+    use host <- fields.include(fields.string("host"), get: fn(r) { r.host })
+    use path <- fields.include(fields.string("path"), get: fn(r) { r.path })
+    use outcome <- fields.include(outcome_field(), get: fn(r) { r.outcome })
+    fields.success(HttpRequest(method:, host:, path:, outcome:))
+  }
   sinal.event(["warden", "http", "request"], measurements, metadata)
 }
 
