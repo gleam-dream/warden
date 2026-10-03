@@ -342,8 +342,8 @@ pub fn verifier(
   validator: Validator,
   token_value: fn(token) -> String,
   accept: fn(AccessClaims) -> a,
-  rejected: e,
-  unavailable: e,
+  rejected rejected: e,
+  unavailable unavailable: e,
 ) -> fn(token) -> Result(a, e) {
   fn(token) {
     case verify(validator, token_value(token)) {
