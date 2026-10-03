@@ -65,6 +65,10 @@ classifies failures. These duties remain with the application.
   `iat` and required scopes. A locally valid token stays valid until it
   expires even if the provider revoked it; use `warden.introspect` where
   revocation must take effect at once.
+- Behind a framework that compares audiences itself (Relay's `admit`), build
+  the validator with `AudienceCheckedByCaller` so the framework can name a
+  token for another resource. With that policy Warden does not compare
+  `aud`; the framework or your code must (D38).
 - `warden.introspect` checks `exp` and `nbf` but not the audience: check
   `TokenInfo.audiences` and `scopes` yourself (Relay's `admit` does).
 

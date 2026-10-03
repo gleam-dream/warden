@@ -686,3 +686,52 @@ cache with the result. The text below describes the removed oidcc path.
 - Revisit: a host framework that hands an app its bound address before the
   handler is built, or a provider registration that the client discovers at
   run time.
+
+## D38 — A wrong-audience token reaches the framework (wave 5, secure_mcp)
+
+- Problem: `resource.verifier` could only return `rejected`, and Warden's
+  `ExactAudience` check ran before Relay's. A token issued for another
+  resource therefore got Relay's generic "invalid or expired" 401, and
+  Relay's own `ResourceNotGranted` ("issued for another resource") was
+  unreachable.
+- Relay's verifier interface (`fn(BearerToken) -> Result(Attestation,
+VerificationError)`) has no wrong-audience error. The only way to make
+  Relay say it is an `Ok(Attestation)` whose audiences differ from the
+  resource, which `admit` already refuses. A signed token for another
+  resource is a fully verified token, so handing it over is accurate.
+- New `AudiencePolicy` variant `AudienceCheckedByCaller`: every other check
+  (signature, `alg`, `typ`, `iss`, `exp`, `nbf`, `iat`, `sub`, scopes) runs;
+  only the `aud` comparison is skipped, and `audiences(claims)` returns what
+  the token names, so the caller compares it. The Relay recipe sets it.
+- Opt-in, not the default and not implied by `verifier`. A framework that
+  does not compare audiences would otherwise lose a check it had. The
+  default `ExactAudience` stays fail-closed, and `verifier`'s docs say what
+  `accept` must do (pass the audiences on unchanged). Misuse is a caller
+  choosing the policy and then ignoring `audiences`; the name and docs say
+  so, as with `allow_any_token_type`.
+- `verifier` keeps its signature. A `wrong_audience:` argument was rejected:
+  Relay has nothing to map it to, and the verified claims carry the answer.
+- Introspection already returned audiences and needed no change.
+- Relay may still add a `VerificationError` variant for a wrong audience
+  (additive); the policy would then be unnecessary for Relay and remain
+  for other frameworks. Not required.
+- Tests: `audience_checked_by_caller_skips_only_the_audience_test`,
+  `verifier_reports_a_wrong_audience_when_the_caller_compares_test`; the
+  `relay_consumer` tests run the recipe through Relay's `admit` and
+  `challenge`.
+
+## D39 — No JWK or JWKS trust anchor for 1.0 (wave 5)
+
+- `config.Trust` is the set of X.509 roots that authenticate the provider's
+  TLS endpoints. PEM is the standard text form of a certificate, and the
+  only consumer-facing complaint (sso_portal) is that http_gun's `Anchors`
+  wants DER, a format question rather than a missing key-pinning feature.
+- A JWK or JWKS anchor is a different mechanism: pinning the provider's
+  signing keys instead of fetching `jwks_uri`. It would bypass discovery,
+  key rotation and the unknown-`kid` refresh (D30), and no app, provider
+  profile or conformance case asks for it. Pinned keys without rotation are
+  a liability a release should not invite.
+- Not added. `Trust` may gain a variant later without breaking callers that
+  match on it only to build one; the cost of adding it is not rising.
+- Revisit: a provider that publishes no JWKS endpoint, or an application
+  that must verify tokens offline against keys it distributed itself.

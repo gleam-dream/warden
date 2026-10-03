@@ -154,10 +154,15 @@ Warden's key cache: `alg` allowlist (`none` and HMAC unrepresentable),
 `typ` `at+jwt`, exact `iss`, exact audience, strict `exp`, `nbf` and `iat`
 with the clock tolerance, required scopes. `resource.error_kind` maps an
 error to 401, 403 or 503. `resource.verifier` adapts the validator to
-Relay's `authorization.verifier`; `attest` turns the claims into Relay's attestation. Pass the two error
-arguments by label: they have the same type, so swapped positional values
-compile. The function folds 403 into 401, so leave `with_required_scopes`
-unset and let Relay's `admit` report insufficient scope (403).
+Relay's `authorization.verifier`; `attest` turns the claims into Relay's
+attestation. Pass the two error arguments by label: they have the same type,
+so swapped positional values compile. The function folds 403 into 401, so
+leave `with_required_scopes` unset and let Relay's `admit` report
+insufficient scope (403). Relay's `admit` also compares the audiences, so the
+recipe sets `AudienceCheckedByCaller`: Warden then skips only the `aud`
+comparison, and a token for another resource gets Relay's "issued for
+another resource" challenge instead of the generic one. Use that policy only
+behind a framework that compares `resource.audiences(claims)` itself.
 `warden.introspect` (RFC 7662) is the alternative for opaque tokens or
 immediate revocation: it checks `exp` strictly and `nbf`, refuses tokens over
 8 KiB locally, and returns `audiences` and typed claims. Both recipes below
@@ -175,8 +180,16 @@ pub type Principal {
   Principal(subject: String, client_id: Option(String), scopes: List(String))
 }
 
-/// Local RFC 9068 validation: no provider request per token.
-pub fn jwt_verifier(validator: resource.Validator) -> Verifier(Principal) {
+/// Local RFC 9068 validation: no provider request per token. Relay's `admit`
+/// compares the audiences, so Warden leaves that check to it and a token for
+/// another resource gets Relay's "issued for another resource" challenge.
+pub fn jwt_verifier(
+  client: warden.Client,
+  resource_url: String,
+) -> Verifier(Principal) {
+  let validator =
+    resource.new(client, audience: resource_url)
+    |> resource.with_audience_policy(resource.AudienceCheckedByCaller)
   authorization.verifier(
     "warden-jwt",
     resource.verifier(
@@ -323,7 +336,7 @@ local JWT validator accepts it until it expires.
 | RFC 9207 `iss`                                           | required when advertised                                                                       | `config.with_issuer_parameter`                                 |
 | destinations, TLS trust                                  | public addresses, system trust                                                                 | `config.with_destinations`, `with_allowed_hosts`, `with_trust` |
 | ID-token audience                                        | exactly the client                                                                             |                                                                |
-| access-token audience and type (`warden/resource`)       | exactly the configured audience; `typ` `at+jwt`                                                | `resource.with_audience_policy`, `allow_any_token_type`        |
+| access-token audience and type (`warden/resource`)       | exactly the configured audience (or left to the caller); `typ` `at+jwt`                        | `resource.with_audience_policy`, `allow_any_token_type`        |
 | binding cookie                                           | `__Host-warden_binding`, `Secure`, `HttpOnly`, `Path=/`, `SameSite=Lax` (`None` for form post) |                                                                |
 | session and login storage                                | in memory                                                                                      | `config.with_custody_store`, `with_transaction_store`          |
 | `client_credentials`                                     | not cached: one token request per call                                                         |                                                                |

@@ -8,6 +8,23 @@ and the evidence for each wave in [docs/PROGRESS.md](docs/PROGRESS.md).
 
 ## Unreleased
 
+### Added (wave 5; see docs/migration-wave-5.md)
+
+- `resource.AudienceCheckedByCaller`: an `AudiencePolicy` that skips only the
+  `aud` comparison and returns the token's audiences in the claims, so a
+  framework that compares them (Relay's `admit`) can answer a token for
+  another resource with its own challenge instead of the generic 401. Opt-in;
+  the default stays `ExactAudience` (D38).
+- `relay_consumer` now runs the README recipe through Relay's `admit` and
+  `challenge` (five tests, part of `scripts/relay-recipe`).
+
+### Changed (wave 5)
+
+- The Relay verifier recipe builds its validator, so the policy is visible:
+  `jwt_verifier(client, resource_url)` replaces `jwt_verifier(validator)`.
+  The README and the `resource` module doc carry the same code.
+- Decided: no JWK or JWKS trust anchor in 1.0 (D39).
+
 ### Added (round 5; see docs/migration-round-5.md)
 
 - Per-login redirect URI: `config.with_allowed_redirect_uris(config, uris)`
