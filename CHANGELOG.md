@@ -8,6 +8,26 @@ and the evidence for each wave in [docs/PROGRESS.md](docs/PROGRESS.md).
 
 ## Unreleased
 
+### Added (round 5; see docs/migration-round-5.md)
+
+- Per-login redirect URI: `config.with_allowed_redirect_uris(config, uris)`
+  and `LoginOptions.redirect_uri: Option(String)`. A login may name the
+  configured URI or an allowed one, matched exactly; anything else fails
+  with `InvalidLoginOption(RedirectUriNotAllowed)`. New `ConfigError`
+  variants `InvalidAllowedRedirectUri(String)` and
+  `AllowedRedirectUrisNeedLogin` (D36, D37).
+- `warden/testing`: the provider serves a scripted login page at `GET` and
+  `POST /authorize`, so a test browser follows the app's own redirect over
+  HTTPS (`LoginDecision`: `SignIn(subject)`, which honours `login_hint`, or
+  `Refuse(error)`; `with_login`, `set_login`; default user `test-user`).
+  `revoke_access_token`, `set_access_token_audiences` and
+  `RequestCounts.authorizations` (D35).
+
+### Changed (round 5)
+
+- `testing.authorize` also requires `response_type=code`, as `/authorize`
+  does; Warden always sends it.
+
 ### Changed (breaking, release wave 4; see docs/migration-wave-4.md)
 
 - `Config` is opaque, built by `config.new`, `config.service_client` (no

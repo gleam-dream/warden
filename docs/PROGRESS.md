@@ -269,6 +269,19 @@ conformance entry point with it; see [decisions.md](decisions.md#d7--pkce-s256-a
   not rerun in this wave (they need the local provider containers).
 - Migration guide: [migration-wave-4.md](migration-wave-4.md).
 
+### W14 — test login page and per-login redirect URI (round 5, 2026-10-03)
+
+- `warden/testing` serves a scripted `/authorize` (`LoginDecision`,
+  `with_login`, `set_login`, `login_hint`), revokes single access tokens and
+  sets the access-token audience after start (D35). A login may choose its
+  redirect URI from an exact allowlist (`config.with_allowed_redirect_uris`,
+  `LoginOptions.redirect_uri`, `RedirectUriNotAllowed`) (D36); the redirect
+  URI stays fixed at `warden.new` (D37).
+- Fast gate: 183 tests (8 new), negative compile cases unchanged, consumer
+  13 tests (2 new: an HTTP-level login through the reference app's routes,
+  and a per-login redirect URI).
+- Migration guide: [migration-round-5.md](migration-round-5.md).
+
 ## Remaining limitations and gaps
 
 - Production readiness requires the design's release gates and an

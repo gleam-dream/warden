@@ -599,3 +599,90 @@ cache with the result. The text below describes the removed oidcc path.
   fails before the request deadline instead of using all of it.
 - Provider-cache calls wait one request timeout + 1 s (WARDEN-R11), so a
   slow key refetch no longer reports `UnknownSigningKey` early.
+
+## D35 — The test provider serves a scripted `/authorize` (round 5)
+
+- `warden/testing`'s provider answers `GET` and `POST /authorize` like a
+  login page whose user always answers as a `LoginDecision` says:
+  `SignIn(subject)` (default `test-user`; the request's `login_hint` names
+  the user instead, so one provider serves several users per login) or
+  `Refuse(error)`. `with_login` sets it at start, `set_login` after. A test
+  browser follows the app's own login redirect over HTTPS and returns to the
+  callback, so apps carry no login hook in production code (sso_portal
+  `Context.login_response`, secure_mcp `/login`). `testing.authorize`
+  remains the in-process path and shares the same validation.
+- It never redirects to an unverified place: an unknown `client_id` or a
+  redirect URI that is not an absolute `http(s)` URI answers `400` with no
+  `Location` (RFC 6749 §4.1.2.1). Other faults of a verified client
+  (`response_type` not `code`, no S256 challenge, no state or nonce)
+  redirect back with `error=invalid_request`. The provider checks no
+  redirect URI registration; Warden's own allowlist (D36) and the code
+  exchange's exact `redirect_uri` comparison stay the checks under test.
+- `revoke_access_token(provider, token)` revokes one access token for
+  introspection and userinfo. A local RFC 9068 validator does not see it:
+  JWT access tokens carry no revocation channel, and `warden/resource`
+  re-fetches keys only for an unknown `kid`, so key rotation would not be an
+  honest substitute either. Tests that need a revoked token refused at once
+  use introspection; with local validation they use short lifetimes. The
+  resource and testing docs say so, and
+  `revoked_access_token_is_seen_by_introspection_only_test` asserts both
+  sides.
+- `set_access_token_audiences(provider, audiences)` sets the `aud` of
+  tokens issued from then on, so an app can name an address it learns only
+  after the provider starts.
+- Nothing here changes a production default: these are `warden/testing`
+  functions, trusted only through `testing.config` and `testing.trusting`
+  (D29).
+- Tests: `test/warden/testing_authorize_test.gleam`; consumer
+  `http_login_test.gleam` drives the reference app's real `/login` and
+  `/callback` routes through the provider's page.
+- Revisit: an app needing provider sessions (SSO across clients) or
+  consent screens in tests.
+
+## D36 — Per-login redirect URI from an exact allowlist (round 5, SSO-10, release report Q9)
+
+- `config.new(redirect_uri:)` stays the ordinary path: one URI, used by
+  every login. `config.with_allowed_redirect_uris(config, uris)` adds
+  further registered callback addresses, and a login chooses one with
+  `LoginOptions(redirect_uri: Some(uri), ..)`. `None` (the default) is the
+  configured URI.
+- Matching is exact string equality against the configured URI and the
+  allowlist: no prefix, wildcard, case, port, trailing-slash or
+  percent-encoding equivalence (RFC 9700 §4.1.3). Any
+  other URI fails `begin_login` with
+  `InvalidLoginOption(RedirectUriNotAllowed)` before anything is stored or
+  sent; `login_error_action` maps it to `FixConfiguration`, since the app,
+  not the browser, chooses the URI. The error carries no URI, so a value
+  derived from request input is not echoed into logs.
+- Each allowed URI passes the same rule as the configured one
+  (`InvalidAllowedRedirectUri(uri)`), and only a relying party takes them
+  (`AllowedRedirectUrisNeedLogin` for `service_client` and
+  `resource_server`).
+- The chosen URI is stored with the pending login and sent unchanged in the
+  token request, so the code is exchanged with exactly the URI the
+  authorization request named (RFC 6749 §4.1.3); a login begun for one
+  address cannot be completed with another's.
+- Tests: `login_chooses_an_allowed_redirect_uri_test` (the chosen URI in the
+  authorization request, the provider's redirect and the exchange; eight
+  near-miss URIs refused), `allowed_redirect_uris_are_validated_test`,
+  consumer `login_chooses_a_registered_redirect_uri_test`.
+
+## D37 — The redirect URI is still known before `warden.new` (round 5, SSO-10)
+
+- Checked: the allowlist does not remove sso_portal's port reservation. The
+  portal's handler needs the `Client` before mist binds, so whatever URI
+  the client may use must be known before the port is. Removing the
+  reservation would need the allowlist to change after `new`.
+- Not offered. A `Client` is an immutable value that survives supervisor
+  restarts (D30); a later-set redirect URI would live in process state that
+  a restart loses (logins then fail until the app sets it again) or in
+  global state that outlives the client, and a security-relevant setting
+  would change under running logins. In production the redirect URI is the
+  registered public address, known at deploy time; the reservation is test
+  harness ordering, which the harness owns (a known port, or binding before
+  building the handler).
+- The test provider's audience, the other reason secure_mcp reserved a port
+  first, can now be set after start (D35).
+- Revisit: a host framework that hands an app its bound address before the
+  handler is built, or a provider registration that the client discovers at
+  run time.

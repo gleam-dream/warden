@@ -220,17 +220,61 @@ pub fn introspection_verifier(client: warden.Client) -> Verifier(Principal) {
 }
 ```
 
+## Several callback addresses
+
+One URI given to `config.new` serves most applications. One served under
+several registered callback addresses lists the others, and a login picks
+one; the match is exact, and anything else fails closed:
+
+```gleam
+let config =
+  config.new(
+    issuer:,
+    client_id:,
+    redirect_uri: "https://app.example.com/callback",
+    authentication:,
+  )
+  |> config.with_allowed_redirect_uris(["https://admin.example.com/callback"])
+
+// GET /admin/login
+let options =
+  warden.LoginOptions(
+    ..warden.default_login(),
+    redirect_uri: Some("https://admin.example.com/callback"),
+  )
+warden.begin_login(client, request, options)
+// "https://admin.example.com/callback/", or any other near miss:
+//   Error(InvalidLoginOption(RedirectUriNotAllowed))
+```
+
+The code is exchanged with the URI the login chose. Every allowed URI must
+be registered at the provider, and all of them are fixed when `warden.new`
+runs ([D36, D37](docs/decisions.md)).
+
 ## Testing
 
 `warden/testing` starts a scripted provider over HTTPS on loopback, with
 its own PKI, so an application tests its Warden integration without
-writing a provider:
+writing a provider. Its `/authorize` page signs a test user in, so a test
+browser follows the application's own `/login` redirect over HTTPS
+(trusting `testing.trust_anchor_pem`) and comes back to `/callback` with no
+test hook in the application:
 
 ```gleam
-let assert Ok(provider) = testing.start_provider(testing.provider_options())
+let assert Ok(provider) =
+  testing.start_provider(
+    testing.provider_options() |> testing.with_login(testing.SignIn("ada")),
+  )
 let assert Ok(client) =
   warden.new(testing.config(provider, "https://app.test/callback"))
-let assert Ok(Nil) = warden.start(client)
+// /login -> provider /authorize (signs "ada" in) -> /callback?code=...
+testing.set_login(provider, testing.Refuse("access_denied"))  // the next one is cancelled
+```
+
+A request's `login_hint` picks the user per login. Unit tests that hold
+the `LoginRedirect` skip HTTP:
+
+```gleam
 let assert Ok(redirect) =
   warden.begin_login(client, request.new(), warden.default_login())
 let assert Ok(callback) = testing.authorize(provider, redirect, subject: "ada")
@@ -238,8 +282,11 @@ let assert Ok(session) = warden.complete_login(client, callback)
 ```
 
 It also mints access tokens (`issue_access_token`, including forged ones),
-revokes refresh tokens, skews its clock, rotates its key and counts
-requests.
+revokes refresh tokens and single access tokens (`revoke_access_token`),
+sets the access-token audience after start
+(`set_access_token_audiences`), skews its clock, rotates its key and counts
+requests. A revoked access token is refused by introspection at once; a
+local JWT validator accepts it until it expires.
 
 ## Defaults
 
@@ -290,7 +337,7 @@ requests.
 | `warden/store`     | the storage port for durable sessions and logins                                                         |
 | `warden/resource`  | local JWT access-token validation (RFC 9068)                                                             |
 | `warden/telemetry` | typed Sinal events (HTTP requests, login, refresh, logout) with correlation                              |
-| `warden/testing`   | scripted provider with test PKI, in-memory store, store conformance check                                |
+| `warden/testing`   | scripted provider with a login page and test PKI, in-memory store, store conformance check               |
 
 `warden.with_correlation(client, correlation)` is a pure view whose events
 and HTTP Gun requests carry a `sinal/correlation` value. Warden's HTTP Gun
