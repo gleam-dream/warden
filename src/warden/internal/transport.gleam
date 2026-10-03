@@ -254,6 +254,8 @@ fn settings(policy: Policy) -> config.Config {
   }
   let configured =
     config.default()
+    // Applications can filter Warden's HTTP Gun events by this label.
+    |> config.with_label("warden")
     |> config.with_trust(case policy.trust {
       SystemTrust -> config.SystemTrust
       Anchors(ders) -> config.Anchors(ders)

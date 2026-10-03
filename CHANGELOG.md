@@ -28,6 +28,9 @@ and the evidence for each wave in [docs/PROGRESS.md](docs/PROGRESS.md).
   `string.inspect` and crash reports do not print them.
 - HTTPS through a supervised HTTP Gun client per Warden client, under a
   destination policy, verified TLS and bounded responses.
+- Warden labels its HTTP Gun client `"warden"` (`config.with_label`), so
+  an application can filter or route Warden's HTTP events by the `client`
+  key in their metadata.
 - An explicit opt-in, `AssumeS256WhenUnadvertised`, for providers that do
   not advertise PKCE methods; the default still requires advertised S256.
 - Typed Sinal observations of provider requests (`warden/observation`).

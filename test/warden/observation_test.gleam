@@ -2,7 +2,8 @@
 
 import gleam/erlang/process
 import gleam/list
-import gleam/option.{None}
+import gleam/option.{None, Some}
+import http_gun/telemetry as http_telemetry
 import sinal
 import warden/internal/transport
 import warden/observation
@@ -57,4 +58,27 @@ pub fn failure_event_carries_send_evidence_test() {
     list.filter(events, fn(e) { e.path == "/refused-observed" })
   assert event.outcome
     == observation.Failed(sent: False, class: "destination_rejected")
+}
+
+pub fn http_gun_events_carry_the_warden_client_label_test() {
+  let server = support.server_start("localhost", support.OkJson)
+  let url = support.server_url(server, "/labelled")
+  let policy =
+    transport.Policy(
+      ..transport.policy(transport.Anchors([support.ca_der()])),
+      allow_loopback: True,
+    )
+  let inbox = process.new_subject()
+  let plan =
+    sinal.subscriptions([
+      sinal.subscription(http_telemetry.event(), fn(_, metadata) {
+        process.send(inbox, metadata.client)
+      }),
+    ])
+  let assert Ok(sinal.SubscriptionCompletion(work_result: Ok(_), ..)) =
+    sinal.with_subscriptions(plan, fn() { send(policy, url) })
+  support.server_stop(server)
+  let assert Ok(client) = process.receive(inbox, 1000)
+  assert client == Some("warden")
+  assert list.all(drain(inbox, []), fn(client) { client == Some("warden") })
 }

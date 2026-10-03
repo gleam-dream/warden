@@ -59,6 +59,10 @@ A complete reference relying party using public imports only lives in
 [`consumer/`](consumer/). Application duties (cookies, storage, secrets)
 are listed in [docs/APPLICATION-RESPONSIBILITIES.md](docs/APPLICATION-RESPONSIBILITIES.md).
 
+Warden's HTTP Gun client is labelled `"warden"`. Its `http_gun/telemetry`
+events carry `client: Some("warden")`, so an application's node-wide
+handler can filter or route Warden's HTTP events by that label.
+
 ## Development
 
 ```sh
