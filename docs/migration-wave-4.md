@@ -324,7 +324,9 @@ Ok(warden.ActiveToken(info)) ->
 
 // After
 Ok(warden.ActiveToken(info)) -> {
-  let audiences = list.filter_map(info.audiences, authorization.resource)
+  // `info.audiences` is already a List(String)
+  let attestation =
+    authorization.attestation(principal, info.audiences, info.scopes)
   ...
 }
 ```

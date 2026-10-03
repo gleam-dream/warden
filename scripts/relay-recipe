@@ -1,0 +1,37 @@
+#!/bin/sh
+# Compiles the Relay verifier recipe verbatim. Warden does not depend on
+# Relay, so the recipe lives in README.md (after `<!-- relay-recipe -->`) and
+# is compiled by relay_consumer/, a separate package that depends on Warden
+# and Relay by path. The module doc of src/warden/resource.gleam must carry
+# the same code.
+#   nix develop -c scripts/relay-recipe
+set -eu
+ROOT=$(cd "$(dirname "$0")/.." && pwd)
+OUT="$ROOT/relay_consumer/src/recipe.gleam"
+README_CODE=$(awk '
+  /^<!-- relay-recipe -->$/ { armed = 1; next }
+  armed && /^```gleam$/ { inside = 1; next }
+  inside && /^```$/ { exit }
+  inside { print }
+' "$ROOT/README.md")
+DOC_CODE=$(awk '
+  /^\/\/\/\/ ## With Relay$/ { armed = 1; next }
+  armed && /^\/\/\/\/ ```gleam$/ { inside = 1; next }
+  inside && /^\/\/\/\/ ```$/ { exit }
+  inside { sub(/^\/\/\/\/ ?/, ""); print }
+' "$ROOT/src/warden/resource.gleam")
+if [ -z "$README_CODE" ]; then echo "relay-recipe: no recipe found in README.md" >&2; exit 1; fi
+if [ "$README_CODE" != "$DOC_CODE" ]; then
+  echo "relay-recipe: README.md and the resource.gleam module doc differ" >&2
+  TMP=$(mktemp -d)
+  printf '%s\n' "$README_CODE" >"$TMP/readme"
+  printf '%s\n' "$DOC_CODE" >"$TMP/module-doc"
+  diff -u "$TMP/readme" "$TMP/module-doc" >&2 || true
+  rm -rf "$TMP"
+  exit 1
+fi
+printf '%s\n' "$README_CODE" >"$OUT"
+cd "$ROOT/relay_consumer"
+gleam format --check src
+gleam build --warnings-as-errors
+echo "relay recipe: ok"

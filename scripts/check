@@ -10,4 +10,5 @@ echo "== build"; gleam build --warnings-as-errors
 echo "== fast suite"; WARDEN_SUITE=fast gleam test
 if [ -x scripts/negative ]; then echo "== negative compile tests"; scripts/negative; fi
 if [ -d consumer ]; then echo "== consumer"; (cd consumer && gleam format --check src test && gleam build --warnings-as-errors && gleam test); fi
+echo "== relay recipe"; scripts/relay-recipe
 echo "fast gate: ok"

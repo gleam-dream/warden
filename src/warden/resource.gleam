@@ -38,23 +38,70 @@
 //// ## With Relay
 ////
 //// Relay's verifier takes a function from its `BearerToken` to an
-//// attestation. `verifier` builds that function in one line; Relay's
-//// `admit` then checks the resource and the endpoint scopes itself, so leave
-//// `with_required_scopes` unset:
+//// attestation. `verifier` builds that function; Relay's `admit` then checks
+//// the resource audience and the endpoint scopes itself, so leave
+//// `with_required_scopes` unset. The recipe below, and the introspection
+//// variant for opaque tokens or immediate revocation, is compiled against
+//// Relay by `scripts/relay-recipe` on every gate run:
 ////
 //// ```gleam
-//// let verifier =
-////   authorization.verifier("warden", "1", resource.verifier(validator, authorization.token_value, attest, authorization.BearerRejected, authorization.VerifierUnavailable))
+//// import gleam/option.{type Option, None, Some}
+//// import relay/authorization.{type Attestation, type Verifier}
+//// import warden
+//// import warden/resource
 ////
-//// fn attest(claims: resource.AccessClaims) {
-////   authorization.attestation(claims,
-////     list.filter_map(resource.audiences(claims), authorization.resource),
-////     list.filter_map(resource.scopes(claims), authorization.scope))
+//// pub type Principal {
+////   Principal(subject: String, client_id: Option(String), scopes: List(String))
+//// }
+////
+//// /// Local RFC 9068 validation: no provider request per token.
+//// pub fn jwt_verifier(validator: resource.Validator) -> Verifier(Principal) {
+////   authorization.verifier(
+////     "warden-jwt",
+////     resource.verifier(
+////       validator,
+////       authorization.token_value,
+////       attest,
+////       rejected: authorization.BearerRejected,
+////       unavailable: authorization.VerifierUnavailable,
+////     ),
+////   )
+//// }
+////
+//// fn attest(claims: resource.AccessClaims) -> Attestation(Principal) {
+////   let scopes = resource.scopes(claims)
+////   authorization.attestation(
+////     Principal(resource.subject(claims), resource.client_id(claims), scopes),
+////     resource.audiences(claims),
+////     scopes,
+////   )
+//// }
+////
+//// /// RFC 7662 introspection: one provider request per token, so a revoked
+//// /// token is refused at once.
+//// pub fn introspection_verifier(client: warden.Client) -> Verifier(Principal) {
+////   use token <- authorization.verifier("warden-introspection")
+////   case warden.introspect(client, authorization.token_value(token)) {
+////     Ok(warden.ActiveToken(warden.TokenInfo(subject: Some(subject), ..) as info)) ->
+////       Ok(authorization.attestation(
+////         Principal(subject, info.client_id, info.scopes),
+////         info.audiences,
+////         info.scopes,
+////       ))
+////     Ok(warden.ActiveToken(warden.TokenInfo(subject: None, ..))) ->
+////       Error(authorization.VerifierUnmapped)
+////     Ok(warden.InactiveToken) | Error(warden.IntrospectionTokenTooLarge) ->
+////       Error(authorization.BearerRejected)
+////     Error(warden.IntrospectionNotSupported)
+////     | Error(warden.IntrospectionFailed(_)) ->
+////       Error(authorization.VerifierUnavailable)
+////   }
 //// }
 //// ```
 ////
-//// `warden.introspect` remains the alternative for opaque tokens, or when
-//// revocation must take effect before a token expires.
+//// Relay's `VerificationError` has no 403, so `verifier` folds a missing
+//// scope into `BearerRejected` (401). Let Relay's `admit` report
+//// insufficient scope (403) by leaving `with_required_scopes` unset.
 
 import gleam/dynamic.{type Dynamic}
 import gleam/dynamic/decode
@@ -338,6 +385,16 @@ pub fn verify(
 /// reads the raw token, `accept` builds the framework's result from the
 /// claims, and failures map to `rejected` (every `Rejected` or `Forbidden`
 /// error) or `unavailable`.
+///
+/// Two things to know:
+///
+/// - It folds 403 into 401. A token that lacks a `with_required_scopes` scope
+///   is a `Forbidden` error, and the framework sees only `rejected`. Leave
+///   `with_required_scopes` unset and let the framework check scopes (Relay's
+///   `admit` answers 403), or call `verify` and `error_kind` yourself.
+/// - `rejected` and `unavailable` have the same type, so swapping them
+///   compiles and turns every bad token into 503 and every outage into 401.
+///   Pass them by label, as in the module example, so a swap is visible.
 pub fn verifier(
   validator: Validator,
   token_value: fn(token) -> String,
