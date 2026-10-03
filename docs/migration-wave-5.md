@@ -1,57 +1,86 @@
 # Wave 5 migration
 
-Wave 5 adds one policy variant and changes no signature. An existing build
-keeps compiling and behaving as before: the new variant is opt-in.
+Wave 5 follows relay's wave 5 verifier (relay 43baa65): a verifier receives
+the request's correlation, and `VerificationError` has
+`IssuedForAnotherResource`. One signature in warden breaks, and one function
+is added.
 
-## `warden/resource`: a wrong-audience token reaches Relay
+## `warden/resource`
 
-| Before                                                                                                            | After                                                                                                                           |
-| ----------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
-| `AudiencePolicy`: `ExactAudience`, `AudienceIncluded`                                                             | adds `AudienceCheckedByCaller`: Warden skips only the `aud` comparison, and `audiences(claims)` returns what the token names    |
-| a token for another resource: `verify` gives `AudienceMismatch`; `verifier` gives `rejected` (Relay: generic 401) | unchanged by default; with `AudienceCheckedByCaller`, `verifier` calls `accept`, and Relay's `admit` gives `ResourceNotGranted` |
-| `resource.verifier(validator, token_value, accept, rejected:, unavailable:)`                                      | unchanged                                                                                                                       |
+| Before                                                                    | After                                                                                   |
+| ------------------------------------------------------------------------- | --------------------------------------------------------------------------------------- |
+| `verifier(validator, token_value, accept, rejected: e, unavailable: e)`   | `verifier(validator, token_value, accept, on_error: fn(ErrorKind) -> e)`                |
+| `ErrorKind`: `Rejected`, `Forbidden`, `Unavailable`                       | adds `WrongAudience`; `error_kind(AudienceMismatch)` is `WrongAudience`                 |
+| `AudienceMismatch` could come from a token that also failed another check | `aud` is compared last: a mismatch means a token that is valid but for another resource |
 
 ```gleam
-// Before: Relay saw BearerRejected, so the challenge said "invalid or expired".
-let validator = resource.new(client, audience: mcp_url)
-authorization.verifier("warden-jwt", resource.verifier(validator, authorization.token_value, attest,
-  rejected: authorization.BearerRejected, unavailable: authorization.VerifierUnavailable))
+// Before: a wrong-audience token was a plain rejection.
+resource.verifier(validator, authorization.token_value, attest,
+  rejected: authorization.BearerRejected,
+  unavailable: authorization.VerifierUnavailable)
+|> authorization.verifier("warden-jwt", _)
 
-// After: Relay compares the audiences, so Warden leaves that check to it.
-let validator =
-  resource.new(client, audience: mcp_url)
-  |> resource.with_audience_policy(resource.AudienceCheckedByCaller)
-// the rest is unchanged; `attest` must pass `resource.audiences(claims)` on.
+// After: every kind is mapped, and Relay's own challenge is reachable.
+let verify = resource.verifier(validator, authorization.token_value, attest,
+  on_error: fn(kind) {
+    case kind {
+      resource.Rejected | resource.Forbidden -> authorization.BearerRejected
+      resource.WrongAudience -> authorization.IssuedForAnotherResource
+      resource.Unavailable -> authorization.VerifierUnavailable
+    }
+  })
+use token, _correlation <- authorization.verifier("warden-jwt")
+verify(token)
 ```
 
 A token for another resource now gets 401 `invalid_token` with "issued for
-another resource" and Relay's `ResourceNotGranted` telemetry decision. A
-token with several audiences is refused the same way. Expired,
-forged, unsigned, wrong-issuer, wrong-`typ` and unknown-key tokens are still
-`BearerRejected`, and a missing scope is still Relay's 403.
+another resource", with no policy to set. The introspection recipe applies
+the request's correlation:
 
-Use the policy only when something compares `audiences(claims)`. Without
-that, any validly signed token from the issuer passes. Direct `verify` users
-keep the default.
+```gleam
+// Before
+use token <- authorization.verifier("warden-introspection")
+case warden.introspect(client, authorization.token_value(token)) { .. }
 
-The Relay verifier recipe in the README and in the `resource` module doc
-changed from `jwt_verifier(validator)` to `jwt_verifier(client, resource_url)`
-so the policy is in sight. `scripts/relay-recipe` compiles it and runs five
-tests through Relay (`relay_consumer/test`).
+// After: the provider call joins the MCP request in telemetry.
+use token, correlation <- authorization.verifier("warden-introspection")
+let client = warden.with_correlation(client, correlation)
+case warden.introspect(client, authorization.token_value(token)) { .. }
+```
+
+(Relay's change, not Warden's: `authorization.verifier` takes
+`fn(BearerToken, Correlation)` and `admit` takes the correlation.) The README
+and the `resource` module doc carry the same recipe; `scripts/relay-recipe`
+proves they are identical, compiles them against Relay, and runs six tests
+through `admit` and `challenge`.
+
+An earlier wave 5 draft added `AudiencePolicy.AudienceCheckedByCaller`. It
+never shipped and is gone (D38).
+
+## `warden/testing`
+
+| Before                                                          | After                                                                                    |
+| --------------------------------------------------------------- | ---------------------------------------------------------------------------------------- |
+| `trust_anchor_pem(Provider) -> String` only; callers decoded it | adds `trust_anchor_der(Provider) -> BitArray`, the form HTTP Gun's `Anchors` takes (D39) |
+
+```gleam
+// Before: sso_portal decoded the PEM in its browser client (10 lines).
+// After
+http_gun_config.Anchors([testing.trust_anchor_der(provider)])
+```
 
 ## Decided, not changed
 
-- No JWK or JWKS trust anchor ([D39](decisions.md)). `config.Trust` stays
+- No JWK or JWKS trust anchor ([D39](decisions.md)); `config.Trust` stays
   `SystemTrust | TrustAnchorsPem(String)`.
-- Relay could add a wrong-audience `VerificationError` variant (additive);
-  nothing here needs it.
 
 ## Dependents
 
 Found with `grep` over `/code/gleam-dream/*/src`, `*/test`, `*/integrations`,
 `*/consumers`, `*/examples` and `oversight/apps`.
 
-| Dependent                                               | Uses                                                                        | Effect                                                                                                                                                                                                                                                                      |
-| ------------------------------------------------------- | --------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `oversight/apps/secure_mcp` (`auth.gleam`, `app.gleam`) | `resource.verifier` with `resource.new(resource_server, audience: mcp_url)` | Builds unchanged, behaves unchanged. To get Relay's precise challenge, add `\|> resource.with_audience_policy(resource.AudienceCheckedByCaller)` at `app.gleam:100`; `token_for_another_audience_test` then expects `ResourceNotGranted` and "issued for another resource". |
-| `warden/consumer` (`warden_reference_test.gleam`)       | `resource.verifier` with its own attestation type                           | Unchanged.                                                                                                                                                                                                                                                                  |
+| Dependent                                                  | Uses                                                                                                             | What changes                                                                                                                                                                                                                                                                                                                              |
+| ---------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `oversight/apps/secure_mcp` `auth.gleam:19-30` (and `:44`) | `resource.verifier(.., rejected:, unavailable:)`; `authorization.verifier(name, fn(token) ..)` for introspection | Breaks on the relay and warden signatures. Replace the two labelled arguments with `on_error: refuse` (above), take `use token, _correlation <-` in the JWT verifier, and `use token, correlation <-` plus `warden.with_correlation` in the introspection one. `token_for_another_audience_test` then expects `IssuedForAnotherResource`. |
+| `oversight/apps/sso_portal` browser client                 | decodes `testing.trust_anchor_pem` itself                                                                        | May use `testing.trust_anchor_der` and delete the decoding.                                                                                                                                                                                                                                                                               |
+| `warden/consumer` (`warden_reference_test.gleam`)          | `resource.verifier` with its own refusal type                                                                    | Migrated here: `refuse` maps to `WrongResource`.                                                                                                                                                                                                                                                                                          |

@@ -185,6 +185,7 @@ pub opaque type Provider {
   Provider(
     issuer: String,
     ca_pem: String,
+    ca_der: BitArray,
     server: tls_server.Server,
     state: Subject(Message),
     options: ProviderOptions,
@@ -242,7 +243,14 @@ pub fn start_provider(options: ProviderOptions) -> Result(Provider, TestError) {
   )
   let issuer = "https://localhost:" <> int.to_string(server.port)
   transact(state, fn(s) { #(State(..s, issuer:), Nil) })
-  Ok(Provider(issuer:, ca_pem: pki.ca_pem, server:, state:, options:))
+  Ok(Provider(
+    issuer:,
+    ca_pem: pki.ca_pem,
+    ca_der: pki.ca_der,
+    server:,
+    state:,
+    options:,
+  ))
 }
 
 pub fn stop_provider(provider: Provider) -> Nil {
@@ -267,6 +275,13 @@ pub fn client_id(provider: Provider) -> String {
 /// PEM text of the provider's root certificate.
 pub fn trust_anchor_pem(provider: Provider) -> String {
   provider.ca_pem
+}
+
+/// The provider's root certificate in DER, the form HTTP Gun's `Anchors`
+/// takes, for a test client that calls the provider or the application over
+/// HTTPS without Warden.
+pub fn trust_anchor_der(provider: Provider) -> BitArray {
+  provider.ca_der
 }
 
 /// A relying-party configuration for this provider: its issuer, client and

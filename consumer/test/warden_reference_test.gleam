@@ -208,7 +208,16 @@ type Attestation {
 
 type Refusal {
   BearerRejected
+  WrongResource
   VerifierUnavailable
+}
+
+fn refuse(kind: resource.ErrorKind) -> Refusal {
+  case kind {
+    resource.Rejected | resource.Forbidden -> BearerRejected
+    resource.WrongAudience -> WrongResource
+    resource.Unavailable -> VerifierUnavailable
+  }
 }
 
 fn bearer_value(bearer: Bearer) -> String {
@@ -234,13 +243,7 @@ pub fn resource_server_validation_test() {
   let assert Ok(Nil) = warden.start(client)
   let validator = resource.new(client, audience: "https://api.test")
   let verify =
-    resource.verifier(
-      validator,
-      bearer_value,
-      attest,
-      BearerRejected,
-      VerifierUnavailable,
-    )
+    resource.verifier(validator, bearer_value, attest, on_error: refuse)
   let token =
     testing.issue_access_token(
       provider,
@@ -256,7 +259,7 @@ pub fn resource_server_validation_test() {
       testing.access_token("ada")
         |> testing.with_audiences(["https://other.test"]),
     )
-  assert verify(Bearer(foreign)) == Error(BearerRejected)
+  assert verify(Bearer(foreign)) == Error(WrongResource)
   assert string.contains(
     resource.describe_error(resource.AudienceMismatch),
     "audience",

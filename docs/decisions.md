@@ -687,38 +687,39 @@ cache with the result. The text below describes the removed oidcc path.
   handler is built, or a provider registration that the client discovers at
   run time.
 
-## D38 — A wrong-audience token reaches the framework (wave 5, secure_mcp)
+## D38 — A wrong-audience token is its own outcome (wave 5, secure_mcp)
 
 - Problem: `resource.verifier` could only return `rejected`, and Warden's
-  `ExactAudience` check ran before Relay's. A token issued for another
-  resource therefore got Relay's generic "invalid or expired" 401, and
-  Relay's own `ResourceNotGranted` ("issued for another resource") was
-  unreachable.
-- Relay's verifier interface (`fn(BearerToken) -> Result(Attestation,
-VerificationError)`) has no wrong-audience error. The only way to make
-  Relay say it is an `Ok(Attestation)` whose audiences differ from the
-  resource, which `admit` already refuses. A signed token for another
-  resource is a fully verified token, so handing it over is accurate.
-- New `AudiencePolicy` variant `AudienceCheckedByCaller`: every other check
-  (signature, `alg`, `typ`, `iss`, `exp`, `nbf`, `iat`, `sub`, scopes) runs;
-  only the `aud` comparison is skipped, and `audiences(claims)` returns what
-  the token names, so the caller compares it. The Relay recipe sets it.
-- Opt-in, not the default and not implied by `verifier`. A framework that
-  does not compare audiences would otherwise lose a check it had. The
-  default `ExactAudience` stays fail-closed, and `verifier`'s docs say what
-  `accept` must do (pass the audiences on unchanged). Misuse is a caller
-  choosing the policy and then ignoring `audiences`; the name and docs say
-  so, as with `allow_any_token_type`.
-- `verifier` keeps its signature. A `wrong_audience:` argument was rejected:
-  Relay has nothing to map it to, and the verified claims carry the answer.
-- Introspection already returned audiences and needed no change.
-- Relay may still add a `VerificationError` variant for a wrong audience
-  (additive); the policy would then be unnecessary for Relay and remain
-  for other frameworks. Not required.
-- Tests: `audience_checked_by_caller_skips_only_the_audience_test`,
-  `verifier_reports_a_wrong_audience_when_the_caller_compares_test`; the
-  `relay_consumer` tests run the recipe through Relay's `admit` and
-  `challenge`.
+  exact-audience check ran before Relay's, so a token issued for another
+  resource got Relay's generic "invalid or expired" 401.
+- Relay (43baa65) added `VerificationError.IssuedForAnotherResource`, a 401
+  `invalid_token` with "issued for another resource", for a verifier that
+  checks the audience itself. Warden now reports the outcome instead of
+  folding it into a rejection:
+  - `jose.verify_access_token` compares `aud` last, after signature, `iss`,
+    `exp`, `nbf`, `iat`, `typ`, `sub` and `iat`. `AudienceMismatch` therefore
+    means a token that is valid but for another resource; an expired,
+    forged or malformed token is never reported as one.
+  - `resource.ErrorKind` gains `WrongAudience` (`error_kind(AudienceMismatch)`).
+  - `resource.verifier` takes `on_error: fn(ErrorKind) -> e` instead of the
+    two same-typed `rejected:`/`unavailable:` arguments. The caller matches
+    every kind, so a 503 cannot be swapped with a 401 by position, and a
+    framework with a variant for a wrong audience or a missing scope uses it.
+    Relay maps `Rejected | Forbidden` to `BearerRejected`.
+- No opt-in policy. The first wave 5 attempt added
+  `AudiencePolicy.AudienceCheckedByCaller` (Warden skips `aud`, Relay's
+  `admit` compares it). It is deleted: it weakened a check by configuration,
+  it needed Relay to do the comparison, and no non-relay use asked for it.
+  `ExactAudience` and `AudienceIncluded` are unchanged and fail closed.
+- Introspection already returned audiences. The recipe tags its provider
+  call with the request's correlation (`warden.with_correlation(client,
+correlation)`), so the call joins its MCP request in telemetry. Relay says
+  the correlation may come from the client, and Warden uses it only for
+  telemetry, never for a decision.
+- Tests: `a_wrong_audience_is_reported_only_for_an_otherwise_valid_token_test`,
+  `relay_style_verifier_maps_every_kind_test`; `relay_consumer` runs the
+  recipe through Relay's `admit` and `challenge`, and checks that an
+  introspection call carries the request's correlation.
 
 ## D39 — No JWK or JWKS trust anchor for 1.0 (wave 5)
 
@@ -735,3 +736,7 @@ VerificationError)`) has no wrong-audience error. The only way to make
   match on it only to build one; the cost of adding it is not rising.
 - Revisit: a provider that publishes no JWKS endpoint, or an application
   that must verify tokens offline against keys it distributed itself.
+- The DER half of the complaint is met in `warden/testing`, where the
+  certificate already exists in that form: `testing.trust_anchor_der(provider)
+-> BitArray` is the root HTTP Gun's `Anchors` takes. `config.Trust` stays
+  PEM, since a configuration holds text read from a file or a secret store.

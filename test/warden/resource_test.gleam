@@ -134,19 +134,29 @@ pub fn algorithm_allowlist_is_enforced_test() {
   stop(provider, client)
 }
 
-pub fn relay_style_verifier_adapts_in_one_line_test() {
+pub fn relay_style_verifier_maps_every_kind_test() {
   let #(provider, client, validator) = started()
   let verify =
     resource.verifier(
-      validator,
+      resource.with_required_scopes(validator, ["admin"]),
       fn(wrapped: #(String)) { wrapped.0 },
       resource.subject,
-      "rejected",
-      "unavailable",
+      on_error: fn(kind) {
+        case kind {
+          resource.Rejected -> "rejected"
+          resource.WrongAudience -> "wrong audience"
+          resource.Forbidden -> "forbidden"
+          resource.Unavailable -> "unavailable"
+        }
+      },
     )
-  let raw = testing.issue_access_token(provider, token(provider))
-  assert verify(#(raw)) == Ok("ada")
+  let issue = fn(spec) { #(testing.issue_access_token(provider, spec)) }
+  let admin = token(provider) |> testing.with_scopes(["admin"])
+  assert verify(issue(admin)) == Ok("ada")
   assert verify(#("garbage")) == Error("rejected")
+  assert verify(issue(token(provider))) == Error("forbidden")
+  assert verify(issue(testing.with_audiences(admin, ["https://other"])))
+    == Error("wrong audience")
   stop(provider, client)
 }
 
@@ -176,27 +186,17 @@ pub fn keys_unavailable_is_not_a_rejection_test() {
   testing.stop_provider(provider)
 }
 
-/// `AudienceCheckedByCaller` skips only the `aud` comparison: the claims of
-/// a token for another resource reach the caller with their real audiences,
-/// and every other check still fails closed.
-pub fn audience_checked_by_caller_skips_only_the_audience_test() {
+/// `AudienceMismatch` means everything else passed: the token is valid but
+/// names another resource. Any other fault comes first.
+pub fn a_wrong_audience_is_reported_only_for_an_otherwise_valid_token_test() {
   let #(provider, client, validator) = started()
-  let deferred =
-    resource.with_audience_policy(validator, resource.AudienceCheckedByCaller)
   let verify = fn(spec) {
-    resource.verify(deferred, testing.issue_access_token(provider, spec))
+    resource.verify(validator, testing.issue_access_token(provider, spec))
   }
-  let assert Ok(other) =
-    verify(token(provider) |> testing.with_audiences(["https://other"]))
-  assert resource.audiences(other) == ["https://other"]
-  assert resource.subject(other) == "ada"
-  let assert Ok(two) =
-    verify(
-      token(provider) |> testing.with_audiences([audience, "https://other"]),
-    )
-  assert resource.audiences(two) == [audience, "https://other"]
-  // Everything else is unchanged.
   let wrong = testing.with_audiences(token(provider), ["https://other"])
+  assert verify(wrong) == Error(resource.AudienceMismatch)
+  assert resource.error_kind(resource.AudienceMismatch)
+    == resource.WrongAudience
   assert verify(wrong |> testing.with_ttl(duration.seconds(-10)))
     == Error(resource.TokenExpired)
   assert verify(wrong |> testing.with_issuer("https://evil.test"))
@@ -209,47 +209,5 @@ pub fn audience_checked_by_caller_skips_only_the_audience_test() {
     == Error(resource.UnknownSigningKey)
   assert verify(wrong |> testing.with_token_type(None))
     == Error(resource.TokenTypeInvalid)
-  // The default policy still refuses the same token.
-  assert resource.verify(validator, testing.issue_access_token(provider, wrong))
-    == Error(resource.AudienceMismatch)
-  stop(provider, client)
-}
-
-/// Behind a framework that compares audiences, the verifier hands it the
-/// wrong resource instead of folding it into `rejected`.
-pub fn verifier_reports_a_wrong_audience_when_the_caller_compares_test() {
-  let #(provider, client, validator) = started()
-  let deferred =
-    resource.with_audience_policy(validator, resource.AudienceCheckedByCaller)
-  let attest = fn(claims) { resource.audiences(claims) }
-  let strict =
-    resource.verifier(
-      validator,
-      fn(raw) { raw },
-      attest,
-      rejected: "rejected",
-      unavailable: "unavailable",
-    )
-  let lenient =
-    resource.verifier(
-      deferred,
-      fn(raw) { raw },
-      attest,
-      rejected: "rejected",
-      unavailable: "unavailable",
-    )
-  let other =
-    testing.issue_access_token(
-      provider,
-      token(provider) |> testing.with_audiences(["https://other"]),
-    )
-  assert strict(other) == Error("rejected")
-  assert lenient(other) == Ok(["https://other"])
-  let expired =
-    testing.issue_access_token(
-      provider,
-      token(provider) |> testing.with_ttl(duration.seconds(-10)),
-    )
-  assert lenient(expired) == Error("rejected")
   stop(provider, client)
 }

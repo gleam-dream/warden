@@ -10,19 +10,24 @@ and the evidence for each wave in [docs/PROGRESS.md](docs/PROGRESS.md).
 
 ### Added (wave 5; see docs/migration-wave-5.md)
 
-- `resource.AudienceCheckedByCaller`: an `AudiencePolicy` that skips only the
-  `aud` comparison and returns the token's audiences in the claims, so a
-  framework that compares them (Relay's `admit`) can answer a token for
-  another resource with its own challenge instead of the generic 401. Opt-in;
-  the default stays `ExactAudience` (D38).
-- `relay_consumer` now runs the README recipe through Relay's `admit` and
-  `challenge` (five tests, part of `scripts/relay-recipe`).
+- `resource.WrongAudience`, an `ErrorKind` for a token that passed every
+  other check but names another resource. `aud` is now compared last, so
+  `AudienceMismatch` never hides another fault (D38).
+- `testing.trust_anchor_der(provider)`, the test root in the DER form HTTP
+  Gun's `Anchors` takes (D39).
+- `relay_consumer` runs the README recipe through Relay's `admit` and
+  `challenge` (six tests, part of `scripts/relay-recipe`), including a check
+  that introspection carries the request's correlation.
 
-### Changed (wave 5)
+### Changed (breaking, wave 5)
 
-- The Relay verifier recipe builds its validator, so the policy is visible:
-  `jwt_verifier(client, resource_url)` replaces `jwt_verifier(validator)`.
-  The README and the `resource` module doc carry the same code.
+- `resource.verifier` takes `on_error: fn(ErrorKind) -> e` instead of
+  `rejected:` and `unavailable:`. A wrong-audience token reaches Relay as
+  `IssuedForAnotherResource`, so it gets the precise challenge with no
+  policy to set.
+- The Relay recipe follows Relay's correlated verifier and tags the
+  introspection call with the request's correlation
+  (`warden.with_correlation`).
 - Decided: no JWK or JWKS trust anchor in 1.0 (D39).
 
 ### Added (round 5; see docs/migration-round-5.md)

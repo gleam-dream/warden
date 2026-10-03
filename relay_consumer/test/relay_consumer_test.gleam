@@ -1,14 +1,20 @@
 //// The README recipe, run through Relay's `admit` and `challenge` against
 //// Warden's test provider: every refusal gets the challenge Relay owes it.
 
+import gleam/erlang/process
+import gleam/list
 import gleam/option.{Some}
 import gleam/string
 import gleam/time/duration
 import gleeunit
 import recipe
 import relay/authorization
+import sinal
+import sinal/correlation
 import warden
 import warden/config
+import warden/resource
+import warden/telemetry
 import warden/testing
 
 const resource_url = "https://mcp.example.test/mcp"
@@ -41,10 +47,11 @@ fn spec() -> testing.TokenSpec {
 }
 
 fn admit(provider: testing.Provider, client: warden.Client, spec) {
-  let verifier = recipe.jwt_verifier(client, resource_url)
+  let verifier =
+    recipe.jwt_verifier(resource.new(client, audience: resource_url))
   let assert Ok(token) =
     authorization.bearer_token(testing.issue_access_token(provider, spec))
-  authorization.admit(verifier, token, protection())
+  authorization.admit(verifier, token, protection(), correlation.unique())
 }
 
 fn finish(provider: testing.Provider, client: warden.Client) -> Nil {
@@ -69,7 +76,10 @@ pub fn a_token_for_another_resource_is_named_by_relay_test() {
       client,
       spec() |> testing.with_audiences(["https://other.example.test/mcp"]),
     )
-  assert result == Error(authorization.ResourceNotGranted)
+  assert result
+    == Error(authorization.VerificationFailed(
+      authorization.IssuedForAnotherResource,
+    ))
   let assert Error(error) = result
   let challenge = authorization.challenge(protection(), error)
   assert challenge.status == 401
@@ -86,7 +96,9 @@ pub fn a_token_for_two_resources_is_refused_by_relay_test() {
       client,
       spec() |> testing.with_audiences([resource_url, "https://other.test"]),
     )
-    == Error(authorization.ResourceNotGranted)
+    == Error(authorization.VerificationFailed(
+      authorization.IssuedForAnotherResource,
+    ))
   finish(provider, client)
 }
 
@@ -108,4 +120,44 @@ pub fn other_failures_stay_a_generic_401_test() {
   assert admit(provider, client, forged)
     == Error(authorization.VerificationFailed(authorization.BearerRejected))
   finish(provider, client)
+}
+
+/// The request's correlation tags the introspection call, so the provider
+/// request joins the MCP request in telemetry.
+pub fn introspection_carries_the_request_correlation_test() {
+  let assert Ok(provider) = testing.start_provider(testing.provider_options())
+  let assert Ok(client) =
+    warden.new(testing.config(provider, "https://app.example.test/callback"))
+  let assert Ok(Nil) = warden.start(client)
+  let assert Ok(issued) = warden.client_credentials(client, ["read"])
+  let assert Ok(token) =
+    authorization.bearer_token(warden.access_token_value(issued.access_token))
+  let request = correlation.from_key("mcp-request-7")
+  let inbox = process.new_subject()
+  let plan =
+    sinal.subscriptions([
+      sinal.subscription(telemetry.http_request(), fn(_, event) {
+        process.send(inbox, #(event.path, event.correlation))
+      }),
+    ])
+  let assert Ok(_) =
+    sinal.with_subscriptions(plan, fn() {
+      authorization.admit(
+        recipe.introspection_verifier(client),
+        token,
+        protection(),
+        request,
+      )
+    })
+  let events = drain(inbox, [])
+  assert list.any(events, fn(event) { string.contains(event.0, "introspect") })
+  assert list.all(events, fn(event) { event.1 == Some(request) })
+  finish(provider, client)
+}
+
+fn drain(inbox, acc) {
+  case process.receive(inbox, 0) {
+    Ok(item) -> drain(inbox, [item, ..acc])
+    Error(Nil) -> list.reverse(acc)
+  }
 }

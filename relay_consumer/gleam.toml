@@ -5,9 +5,11 @@ description = "Compiles the README's Relay verifier recipe against Relay and War
 
 [dependencies]
 gleam_stdlib = ">= 0.70.0 and < 2.0.0"
+gleam_erlang = ">= 1.0.0 and < 2.0.0"
 gleam_time = ">= 1.11.0 and < 2.0.0"
 warden = { path = ".." }
 relay = { path = "../../relay" }
+sinal = { path = "../../sinal" }
 
 [dev-dependencies]
 gleeunit = ">= 1.0.0 and < 2.0.0"

@@ -1,10 +1,12 @@
 //// The public test provider end to end: login, access, refresh, logout
 //// with revocation, introspection and client credentials.
 
+import gleam/bit_array
 import gleam/erlang/process
 import gleam/http/request
 import gleam/list
 import gleam/option
+import gleam/string
 import gleam/time/duration
 import warden
 import warden/config
@@ -120,5 +122,19 @@ pub fn issued_tokens_verify_locally_and_races_share_one_refresh_test() {
   assert list.length(list.unique(racers)) == 1
   assert testing.requests(provider).refresh_grants == 1
   warden.stop(client)
+  testing.stop_provider(provider)
+}
+
+/// `trust_anchor_der` is the certificate of `trust_anchor_pem` in the form
+/// HTTP Gun's `Anchors` takes.
+pub fn trust_anchor_der_matches_the_pem_test() {
+  let assert Ok(provider) = testing.start_provider(testing.provider_options())
+  let body =
+    testing.trust_anchor_pem(provider)
+    |> string.split("\n")
+    |> list.filter(fn(line) { !string.starts_with(line, "-----") })
+    |> string.concat
+  assert bit_array.base64_encode(testing.trust_anchor_der(provider), True)
+    == body
   testing.stop_provider(provider)
 }

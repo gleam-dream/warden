@@ -14,6 +14,7 @@
 ////   Error(error) ->
 ////     case resource.error_kind(error) {
 ////       resource.Rejected -> todo    // 401, error="invalid_token"
+////       resource.WrongAudience -> todo // 401, a valid token for another resource
 ////       resource.Forbidden -> todo   // 403, error="insufficient_scope"
 ////       resource.Unavailable -> todo // 503
 ////     }
@@ -29,7 +30,7 @@
 //// | `typ` | `at+jwt` (or `application/at+jwt`) | `allow_any_token_type` |
 //// | signature | a key of the issuer's JWKS; the token's `kid` selects it | |
 //// | `iss` | exactly the configured issuer | |
-//// | `aud` | exactly `[audience]` (unless the caller compares it) | `with_audience_policy` |
+//// | `aud` | exactly `[audience]` | `with_audience_policy` |
 //// | `exp` | required, strictly in the future | |
 //// | `nbf`, `iat` | not later than now plus the clock tolerance; `iat` required | `config.with_clock_tolerance` |
 //// | `sub` | required | |
@@ -44,13 +45,11 @@
 ////
 //// ## With Relay
 ////
-//// Relay's verifier takes a function from its `BearerToken` to an
-//// attestation. `verifier` builds that function; Relay's `admit` then checks
-//// the resource audience and the endpoint scopes itself, so leave
-//// `with_required_scopes` unset and let Relay compare the audiences
-//// (`AudienceCheckedByCaller`, set in the recipe): a token for another
-//// resource then gets Relay's own challenge instead of the generic one. The
-//// recipe below, and the introspection
+//// Relay's verifier takes a function from its `BearerToken` and the
+//// request's correlation to an attestation. `verifier` builds the
+//// validation half; its `on_error` maps a wrong-audience token to Relay's
+//// `IssuedForAnotherResource`. Relay's `admit` checks the endpoint scopes
+//// itself, so leave `with_required_scopes` unset. The recipe below, and the introspection
 //// variant for opaque tokens or immediate revocation, is compiled against
 //// Relay by `scripts/relay-recipe` on every gate run:
 ////
@@ -64,26 +63,26 @@
 ////   Principal(subject: String, client_id: Option(String), scopes: List(String))
 //// }
 ////
-//// /// Local RFC 9068 validation: no provider request per token. Relay's `admit`
-//// /// compares the audiences, so Warden leaves that check to it and a token for
+//// /// Local RFC 9068 validation: no provider request per token. A token for
 //// /// another resource gets Relay's "issued for another resource" challenge.
-//// pub fn jwt_verifier(
-////   client: warden.Client,
-////   resource_url: String,
-//// ) -> Verifier(Principal) {
-////   let validator =
-////     resource.new(client, audience: resource_url)
-////     |> resource.with_audience_policy(resource.AudienceCheckedByCaller)
-////   authorization.verifier(
-////     "warden-jwt",
+//// pub fn jwt_verifier(validator: resource.Validator) -> Verifier(Principal) {
+////   let verify =
 ////     resource.verifier(
 ////       validator,
 ////       authorization.token_value,
 ////       attest,
-////       rejected: authorization.BearerRejected,
-////       unavailable: authorization.VerifierUnavailable,
-////     ),
-////   )
+////       on_error: refuse,
+////     )
+////   use token, _correlation <- authorization.verifier("warden-jwt")
+////   verify(token)
+//// }
+////
+//// fn refuse(kind: resource.ErrorKind) -> authorization.VerificationError {
+////   case kind {
+////     resource.Rejected | resource.Forbidden -> authorization.BearerRejected
+////     resource.WrongAudience -> authorization.IssuedForAnotherResource
+////     resource.Unavailable -> authorization.VerifierUnavailable
+////   }
 //// }
 ////
 //// fn attest(claims: resource.AccessClaims) -> Attestation(Principal) {
@@ -96,9 +95,11 @@
 //// }
 ////
 //// /// RFC 7662 introspection: one provider request per token, so a revoked
-//// /// token is refused at once.
+//// /// token is refused at once. The request's correlation tags the provider
+//// /// call, so it joins the MCP request in telemetry.
 //// pub fn introspection_verifier(client: warden.Client) -> Verifier(Principal) {
-////   use token <- authorization.verifier("warden-introspection")
+////   use token, correlation <- authorization.verifier("warden-introspection")
+////   let client = warden.with_correlation(client, correlation)
 ////   case warden.introspect(client, authorization.token_value(token)) {
 ////     Ok(warden.ActiveToken(warden.TokenInfo(subject: Some(subject), ..) as info)) ->
 ////       Ok(authorization.attestation(
@@ -116,10 +117,6 @@
 ////   }
 //// }
 //// ```
-////
-//// Relay's `VerificationError` has no 403, so `verifier` folds a missing
-//// scope into `BearerRejected` (401). Let Relay's `admit` report
-//// insufficient scope (403) by leaving `with_required_scopes` unset.
 
 import gleam/dynamic.{type Dynamic}
 import gleam/dynamic/decode
@@ -146,14 +143,6 @@ pub type AudiencePolicy {
   ExactAudience
   /// `aud` contains the configured audience among others.
   AudienceIncluded
-  /// Warden does not compare `aud`; every other check still runs, and
-  /// `audiences(claims)` returns what the token names. The caller must
-  /// compare it, or any validly signed token for any resource passes. Use it
-  /// behind a framework that compares the audiences itself and names a wrong
-  /// one precisely: Relay's `admit` does, and answers a token for another
-  /// resource with its own "issued for another resource" challenge. See
-  /// `verifier`.
-  AudienceCheckedByCaller
 }
 
 /// A validator for one audience. Build it with `new` and the setters.
@@ -182,9 +171,6 @@ pub fn new(client: Client, audience audience: String) -> Validator {
   )
 }
 
-/// How `aud` must name this resource server. The default is
-/// `ExactAudience`; `AudienceCheckedByCaller` is for a framework that
-/// compares the audiences itself (see `verifier`).
 pub fn with_audience_policy(
   validator: Validator,
   policy: AudiencePolicy,
@@ -306,6 +292,11 @@ pub type TokenError {
 pub type ErrorKind {
   /// 401 with `error="invalid_token"`.
   Rejected
+  /// 401 with `error="invalid_token"`, for a token that passed every other
+  /// check but names another resource (`AudienceMismatch`). Distinct so a
+  /// framework can say so (Relay's `IssuedForAnotherResource`); answer it
+  /// as `Rejected` where it cannot.
+  WrongAudience
   /// 403 with `error="insufficient_scope"`.
   Forbidden
   /// 503: the keys are unavailable; nothing about the token was decided.
@@ -314,6 +305,7 @@ pub type ErrorKind {
 
 pub fn error_kind(error: TokenError) -> ErrorKind {
   case error {
+    AudienceMismatch -> WrongAudience
     InsufficientScope(_) -> Forbidden
     KeysUnavailable(_) -> Unavailable
     _ -> Rejected
@@ -355,11 +347,7 @@ pub fn verify(
     jose.AccessExpectations(
       issuer: settings.issuer,
       audience: validator.audience,
-      audience_match: case validator.audience_policy {
-        ExactAudience -> jose.ExactAudience
-        AudienceIncluded -> jose.IncludesAudience
-        AudienceCheckedByCaller -> jose.UncheckedAudience
-      },
+      exact_audience: validator.audience_policy == ExactAudience,
       algorithms: validator.algorithms,
       require_type: validator.require_type,
       now: timestamp.from_unix_seconds(settings.clock()),
@@ -416,41 +404,34 @@ pub fn verify(
 /// A verification function for a framework that hands its own token type
 /// to a verifier (such as Relay's `authorization.verifier`): `token_value`
 /// reads the raw token, `accept` builds the framework's result from the
-/// claims, and failures map to `rejected` (every `Rejected` or `Forbidden`
-/// error) or `unavailable`.
+/// claims, and `on_error` maps the answer for a refused token to the
+/// framework's error. Matching on `ErrorKind` is exhaustive, so a 503 cannot
+/// be swapped with a 401 by position, and a framework that has a variant for
+/// a token issued for another resource (`WrongAudience`) or for a missing
+/// scope (`Forbidden`) can use it:
 ///
-/// Three things to know:
+/// ```gleam
+/// fn refuse(kind: resource.ErrorKind) -> authorization.VerificationError {
+///   case kind {
+///     resource.Rejected | resource.Forbidden -> authorization.BearerRejected
+///     resource.WrongAudience -> authorization.IssuedForAnotherResource
+///     resource.Unavailable -> authorization.VerifierUnavailable
+///   }
+/// }
+/// ```
 ///
-/// - With the default `ExactAudience`, a token issued for another resource
-///   is refused here, as `rejected`, so the framework can only answer with
-///   its generic "invalid token". To let the framework name the wrong
-///   resource, build the validator with
-///   `with_audience_policy(AudienceCheckedByCaller)`: the claims then reach
-///   `accept` with their real audiences, and a framework that compares
-///   them (Relay's `admit`) refuses the token itself. Do this only behind
-///   such a framework; `accept` must pass `audiences(claims)` on unchanged.
-/// - It folds 403 into 401. A token that lacks a `with_required_scopes` scope
-///   is a `Forbidden` error, and the framework sees only `rejected`. Leave
-///   `with_required_scopes` unset and let the framework check scopes (Relay's
-///   `admit` answers 403), or call `verify` and `error_kind` yourself.
-/// - `rejected` and `unavailable` have the same type, so swapping them
-///   compiles and turns every bad token into 503 and every outage into 401.
-///   Pass them by label, as in the module example, so a swap is visible.
+/// Relay has no 403 variant for a verifier, so leave `with_required_scopes`
+/// unset and let its `admit` check scopes (403).
 pub fn verifier(
   validator: Validator,
   token_value: fn(token) -> String,
   accept: fn(AccessClaims) -> a,
-  rejected rejected: e,
-  unavailable unavailable: e,
+  on_error on_error: fn(ErrorKind) -> e,
 ) -> fn(token) -> Result(a, e) {
   fn(token) {
     case verify(validator, token_value(token)) {
       Ok(claims) -> Ok(accept(claims))
-      Error(error) ->
-        case error_kind(error) {
-          Unavailable -> Error(unavailable)
-          Rejected | Forbidden -> Error(rejected)
-        }
+      Error(error) -> Error(on_error(error_kind(error)))
     }
   }
 }

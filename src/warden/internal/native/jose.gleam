@@ -120,22 +120,13 @@ pub fn verify_id_token(
   Ok(claims)
 }
 
-/// How an access token's `aud` is compared with the expected audience.
-pub type AudienceMatch {
-  /// `aud` is exactly `[audience]`.
-  ExactAudience
-  /// `aud` contains the audience.
-  IncludesAudience
-  /// `aud` is not compared; the caller compares the returned claims.
-  UncheckedAudience
-}
-
 /// What an access token must satisfy (RFC 9068 §4).
 pub type AccessExpectations {
   AccessExpectations(
     issuer: String,
     audience: String,
-    audience_match: AudienceMatch,
+    /// `aud` must be exactly `[audience]`; otherwise it must contain it.
+    exact_audience: Bool,
     algorithms: List(String),
     /// The header `typ` must be `at+jwt` (or `application/at+jwt`).
     require_type: Bool,
@@ -147,8 +138,9 @@ pub type AccessExpectations {
 /// Verify a JWT access token and return its claims. Order: refuse
 /// encrypted tokens, `none` and algorithms outside the allowlist before
 /// touching keys; check `typ`; verify the signature and `iss`, `exp`
-/// (strictly), `nbf` and `iat` (with tolerance); then the audience policy and
-/// the required `sub` and `iat`.
+/// (strictly), `nbf` and `iat` (with tolerance); then the required `sub` and
+/// `iat`; the audience policy last, so an audience mismatch is reported only
+/// for a token that passed everything else.
 pub fn verify_access_token(
   token: String,
   keys: JwkSet,
@@ -183,29 +175,16 @@ pub fn verify_access_token(
       tolerance: expect.tolerance,
     ),
     Some(expect.issuer),
-    case expect.audience_match {
-      UncheckedAudience -> None
-      _ -> Some(expect.audience)
-    },
+    // The audience is compared below, after every other check, so
+    // `audience_mismatch` means a token that is valid but for another
+    // resource (Relay's `IssuedForAnotherResource`).
+    None,
     require_exp: True,
   ))
   use claims <- result.try(
     jwt.decode(verified, decode.dynamic)
     |> result.replace_error(Rejection("malformed", None)),
   )
-  use _ <- result.try(case expect.audience_match {
-    UncheckedAudience -> Ok(Nil)
-    ExactAudience ->
-      case protocol.audiences(claims) {
-        [audience] if audience == expect.audience -> Ok(Nil)
-        _ -> reject("audience_mismatch")
-      }
-    IncludesAudience ->
-      case list.contains(protocol.audiences(claims), expect.audience) {
-        True -> Ok(Nil)
-        False -> reject("audience_mismatch")
-      }
-  })
   use _ <- result.try(case protocol.string_claim(claims, "sub") {
     Some(sub) if sub != "" -> Ok(Nil)
     _ -> missing("sub")
@@ -214,7 +193,15 @@ pub fn verify_access_token(
     Some(_) -> Ok(Nil)
     None -> missing("iat")
   })
-  Ok(claims)
+  case protocol.audiences(claims), expect.exact_audience {
+    [audience], True if audience == expect.audience -> Ok(claims)
+    _, True -> reject("audience_mismatch")
+    audiences, False ->
+      case list.contains(audiences, expect.audience) {
+        True -> Ok(claims)
+        False -> reject("audience_mismatch")
+      }
+  }
 }
 
 /// A claim that may be absent; when present it must be a string. A present
