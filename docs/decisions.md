@@ -44,7 +44,7 @@ every call:
 | Introspection `client_self_only: true`                             | `false`, Warden classifies `active`                                       | Inactive ≠ error (P1)                                                  |
 | ID token optional in token response                                | Required for login                                                        | Design §3.3                                                            |
 
-## D4 — Stores: in-memory actors (adopted for MVP)
+## D4 — Stores: in-memory actors (adopted for MVP; superseded by D19)
 
 - Transaction store and custody owner are OTP actors under Warden's
   supervisor; each mailbox is the critical section. Durable custody, cookie
@@ -203,7 +203,7 @@ cache with the result. The text below describes the removed oidcc path.
   refreshes immediately (bounded to 64 remembered kids), a repeated one at
   most once per second.
 
-## D12 — Observations through sinal (owner direction, 2026-09-30)
+## D12 — Observations through sinal (owner direction, 2026-09-30; module renamed `warden/telemetry` by D33)
 
 - Warden's observations are typed `sinal` event descriptors in the public
   module `warden/observation`, emitted with `sinal.emit` over `:telemetry`.
@@ -260,7 +260,7 @@ cache with the result. The text below describes the removed oidcc path.
 - Revisit: a native-backend defect that would have needed the fallback; the
   oidcc path remains in git history (`9d74e20` and earlier).
 
-## D14 — Session lifetime in custody (owner decision, 2026-10-01)
+## D14 — Session lifetime in custody (owner decision, 2026-10-01; clock revised by D20)
 
 - Review finding F2: custody entries stayed until `logout`. Sessions now
   have an absolute and an idle lifetime (`config.with_session_lifetime`,
@@ -331,3 +331,271 @@ cache with the result. The text below describes the removed oidcc path.
   gleam_stdlib 1.0.5 (the newest allowed).
 - Revisit: a new gose or kryptos major, or an advisory against a version the
   range admits (raise the lower bound).
+
+## D19 — Storage port: one compare-and-set table (wave 4, 2026-10-03)
+
+- Decision (WARDEN-R1): custody and pending logins run over a public port,
+  `warden/store`: `get`, `put(record, expected)` (insert when `None`,
+  replace at exactly `Some(version)`) and `delete_expired(now)`. Warden
+  keeps the whole protocol (consumption, reservation, settlement,
+  publication, tombstones) and needs only atomic compare-and-set on one row;
+  a PostgreSQL adapter is one table and three statements. The in-memory
+  stores stay the default and implement the same port, so the fast suite
+  exercises the durable code path.
+- One `Store` type serves both tables (the report sketched two): the
+  contract is identical, and keys are prefixed (`session:`, `login:`), so
+  one table may hold both.
+- Every store call runs in a short-lived process bounded by the store
+  timeout; a read that does not finish is `StoreUnavailable`, a write is
+  `StoreOutcomeUnknown`, an adapter that raises is the same. A late reply is
+  drained after the worker's `DOWN`, so it never reaches the caller's
+  mailbox (finding F4 carried over).
+- Ambiguity is never resolved by acting twice: an install whose write is
+  unknown returns `CustodyUnconfirmed(recovery)` (the same command and
+  reference are resubmitted, idempotently); a consumption whose write is
+  unknown is `TransactionStoreUnavailable` and sends nothing; a publication
+  whose write is unknown returns `RefreshUnconfirmed(recovery)`.
+- Conformance: `warden/testing.check_store` (insert-if-absent, CAS at the
+  version, stale and absent replaces refused, exact payload round-trip,
+  `delete_expired` boundaries, eight concurrent inserts and replaces with
+  exactly one winner). A last-write-wins adapter fails it
+  (`a_store_without_compare_and_set_fails_the_check_test`).
+- Revisit: a store needing multi-row transactions (none so far).
+
+## D20 — Wall-clock lifetimes (wave 4; answers report open question 2)
+
+- Pending logins, session absolute and idle lifetimes, install-recovery
+  horizons and refresh leases are wall-clock Unix seconds, replacing D14's
+  monotonic clock. A record shared by several nodes, or read after a
+  restart, cannot be measured on one node's monotonic clock.
+- Consequence: a wall-clock step moves these deadlines. Hosts must run NTP
+  (APPLICATION-RESPONSIBILITIES). `exp` checks were always wall-clock.
+- The idle period restarts on use with a coalesced write (at most once per
+  `min(60 s, idle / 10)`), so reads do not each cost a store write.
+- Tests: `login_lifetime_follows_the_wall_clock_test`,
+  `use_restarts_the_idle_period_test`, `idle_sessions_end_test`.
+
+## D21 — Sealed records (wave 4, owner decision Q1: sealed for every durable store)
+
+- Every stored record is AES-256-GCM sealed (kryptos over OTP `crypto`)
+  with a 96-bit random nonce. The additional data binds the record kind,
+  its store key and its version, so a sealed value does not open under
+  another key or version: a database writer cannot forge a session or a
+  `VerifiedIdentity`, swap two sessions, or replay a record under another
+  key. A database reader learns no token, PKCE verifier, nonce or claim.
+- Keys are SHA-256 digests (`session:<hex>`, `login:<hex>`): a database
+  reader learns no session reference (a bearer value) and no `state`.
+- A durable store requires `config.with_sealing_key` (validation:
+  `SealingKeyRequired`); the in-memory stores seal with an ephemeral random
+  key per client. The sealed format starts with a version byte and an
+  8-byte key id (a digest prefix); `with_previous_sealing_keys` keeps
+  retired keys for opening, so a rotation signs nobody out.
+- Not prevented: a writer restoring an earlier copy of a whole row
+  (rollback), for example a session from before its logout tombstone.
+  Preventing it needs state outside the store (a monotonic counter or a
+  MAC chain). Documented as an application duty: protect writes, treat
+  backups as key-sensitive.
+- Random-nonce GCM is limited to about 2^32 seals per key; rotate the
+  sealing key well before that (each refresh and idle touch seals once).
+- A record that does not open answers `SessionRecordUnreadable` /
+  `LoginRecordUnreadable`: no exchange, no refresh (fails closed).
+- Tests: `records_are_sealed_and_keyed_by_digest_test`,
+  `tampered_records_do_not_open_test`, `sealing_keys_rotate_test`.
+
+## D22 — Refresh reservation over a store: leases quarantine (wave 4)
+
+- With a shared store, a process monitor cannot see a refresher on another
+  node, so a reservation carries a lease: request timeout + two store
+  timeouts + 1 s. A reservation found after its lease ran out becomes
+  `Orphaned`, which refuses new reservations as
+  `RefreshQuarantined(RefresherLost)` and never releases the generation:
+  the dead refresher may already have sent the refresh token, which the
+  provider may have rotated. The orphaned dispatch's own publication is
+  still accepted (its new tokens are valid).
+- A late `SettleNotSent` does not release an orphaned generation; a late
+  rejection (`invalid_grant`) records revocation.
+- Detection is now at lease expiry instead of process death (seconds
+  instead of milliseconds). Security is unchanged: the rule "a possibly
+  sent refresh token is never resent" holds.
+- Tests: `an_expired_lease_quarantines_but_accepts_its_publication_test`,
+  `an_expired_refresh_lease_quarantines_the_generation_test`,
+  `concurrent_reservations_admit_one_dispatch_test`.
+
+## D23 — One access operation; waiters never dispatch (wave 4, WARDEN-R2)
+
+- `access_token(client, session)` returns the current token unless it
+  expires within the refresh margin (default 30 s), in which case it
+  refreshes. A request that finds another's reservation waits up to the
+  refresh wait (default 5 s, polling the store with backoff from 20 ms to
+  250 ms) and returns the published token; it reserves itself only after
+  the winner settled as proven not sent. A session value older than custody
+  uses the current revision instead of failing as stale; a forced
+  `refresh` on an older value returns the current token without a second
+  refresh.
+- Failures leave `Ok`: one `SessionError`, classified by
+  `session_error_action`. `RefreshReservationRecovery` is deleted: a
+  quarantine is custody state, not a property of a value (report open
+  question 3, accepted).
+- The waiter's bound is the refresh wait, not the lease: it answers
+  `RefreshWaitTimedOut` (retry later) rather than holding a request for the
+  lease.
+- When a margin-triggered refresh decides nothing (its action is
+  `RetryLater`: not sent, store unavailable, wait timed out) and the current
+  token has not expired, `access_token` returns the current token, so a
+  provider outage inside the margin does not fail requests early. Revoked or
+  quarantined outcomes are returned as errors. A forced `refresh` never
+  falls back (`an_undecided_refresh_keeps_the_unexpired_token_test`).
+- Tests: `concurrent_refresh_sends_one_request_test` (8 requests, one
+  refresh grant, one token), `refresh_wait_is_bounded_test`,
+  `access_token_refreshes_within_the_margin_test`.
+
+## D24 — Session references and lost in-memory sessions (wave 4)
+
+- References are 256 random bits. With the in-memory custody they carry a
+  per-start epoch prefix, so a reference from before a restart answers
+  `SessionLost` instead of `SessionNotFound` (SSO-1). Durable stores have no
+  epoch: a missing record is `SessionNotFound`.
+- Logout writes a tombstone kept for the install-recovery horizon (the login
+  lifetime); a session record is kept at least that long after creation.
+  A late `recover_custody` therefore answers `RecoveryEnded`, and one older
+  than the horizon `RecoveryExpired`; neither re-installs (finding F5).
+
+## D25 — Warden owns the binding cookie (wave 4, WARDEN-R4)
+
+- `begin_login` takes the browser's request and reads
+  `__Host-warden_binding`; `login_response` sets it with `Secure`,
+  `HttpOnly`, `Path=/`, no `Domain`, `SameSite=Lax` (query) or `None`
+  (form post), `Max-Age` = login lifetime + 5 min, and
+  `Cache-Control: no-store`. Nothing relaxes it. Six cookie duties leave
+  APPLICATION-RESPONSIBILITIES.
+- `complete_login` takes the callback request: `GET` for query mode, `POST`
+  with `application/x-www-form-urlencoded` for form post; any other method
+  or content type is `CallbackMalformed` before any store is touched. Only
+  a cookie value of Warden's shape (43 base64url characters) is accepted.
+- `Callback` and `BrowserBinding` are removed from the public API.
+
+## D26 — RFC 7009 revocation on logout (wave 4, WARDEN-R7; answers open question 4)
+
+- `default_logout()` revokes: custody is removed first, then the refresh
+  token (or, without one, the access token) is revoked at
+  `revocation_endpoint` with the configured client authentication, then the
+  end-session redirect is built. A failed revocation is reported
+  (`RevocationFailed`) and never restores custody; a provider without the
+  endpoint reports `RevocationUnsupported`.
+- The end-session redirect carries the ID token as `id_token_hint`, so it
+  is an opaque `LogoutRedirect` holding its URL in a closure:
+  `string.inspect` of a logout outcome shows no ID token (wave 1 follow-up).
+- Tests: `login_access_refresh_logout_test`,
+  `logout_redirect_does_not_inspect_the_id_token_test`.
+
+## D27 — Introspection a resource server can use (wave 4, WARDEN-R8)
+
+- `exp` is checked strictly (no tolerance, as D15 does for ID tokens) and
+  `nbf` with the clock tolerance; either failing answers `InactiveToken`.
+- A token over 8 KiB is refused as `IntrospectionTokenTooLarge` without a
+  request, so a resource server does not read a huge token as "provider
+  down"; an empty token is inactive without a request.
+- `TokenInfo` gains `audiences` (string or list) and `not_before`, and its
+  claims are decoded through `decode_token_claims`. Introspection does not
+  check the audience (it has no configured audience); the caller must, and
+  Relay's `admit` does. Local validation (D28) checks it.
+- A resource-server-only client cannot introspect (no credentials).
+
+## D28 — Resource-server role: local JWT access tokens (wave 4, owner decision D7)
+
+- `warden/resource` validates RFC 9068 access tokens with the started
+  client's key cache (an unknown `kid` refreshes keys once, throttled as in
+  D10). Order: size (8 KiB, non-empty); compact JWS only (JWE refused);
+  `alg` in the allowlist before any key is touched (`none` and HMAC are
+  unrepresentable, so a public key cannot be used as an HMAC secret);
+  `typ` `at+jwt` or `application/at+jwt` (required by default,
+  `allow_any_token_type` opts out); signature with a key whose `kid`
+  matches; `iss` exactly the configured issuer; `exp` required and strict;
+  `nbf` and `iat` with the clock tolerance; `aud` exactly `[audience]` by
+  default (`AudienceIncluded` opts into membership), so a token issued for
+  two resource servers cannot be replayed at either; `sub` and `iat`
+  required; required scopes from `scope` (string or list) or `scp`.
+- Deviation from RFC 9068 §2.2: `client_id` and `jti` are not required
+  (Keycloak and others send `azp`); `client_id` falls back to `azp`.
+- Errors are typed and classified: `Rejected` (401 `invalid_token`),
+  `Forbidden` (403 `insufficient_scope`), `Unavailable` (503, keys not
+  loaded); unavailability is never a rejection or an acceptance.
+- Relay integration is an adapter function, not a dependency:
+  `resource.verifier(validator, token_value, accept, rejected, unavailable)`
+  returns the function Relay's `authorization.verifier` takes.
+- `config.resource_server(issuer:)` configures a client with no client
+  identity: no login, client credentials or introspection.
+- Tests: `every_rejection_is_typed_test` (expired, wrong audience, two
+  audiences, wrong issuer, `alg: none`, HS256 keyed with the public key,
+  unknown `kid`, wrong and missing `typ`), `rotated_key_is_fetched_once_test`,
+  `keys_unavailable_is_not_a_rejection_test`.
+
+## D29 — Test support in the package (wave 4, owner decision D12)
+
+- `warden/testing` ships a scripted provider (discovery, keys, token with
+  PKCE S256 and rotating refresh tokens, client credentials, userinfo,
+  introspection, revocation, end-session), its own PKI from
+  `public_key:pkix_test_data` (a CA-issued leaf for `localhost` and
+  `127.0.0.1`; OTP refuses a self-signed peer), ES256 signing with gose and
+  an HTTPS listener over OTP `ssl`. No new dependency and no handwritten
+  Erlang in `src/`.
+- It mints tokens, including forged ones (`alg: none`, HMAC with the public
+  key, unknown key), with keys generated at start. Nothing trusts them unless
+  a configuration names the provider's issuer and root, which only
+  `testing.config` and `testing.trusting` do, together with
+  `AllowLoopbackForTesting`. No production default changes.
+- The listener and state actor are linked to the caller, so a failing test
+  cleans them up.
+
+## D30 — Lifecycle: names first, discovery in the background (wave 4, WARDEN-R5)
+
+- `new(config)` validates and allocates every process name once;
+  `start(client)` discovers synchronously (startup timeout) and refuses an
+  incompatible provider; `supervised(client)` starts at once and discovers
+  in the background with backoff from 1 s to 60 s. Until discovery succeeds
+  and the metadata passes the compatibility check, every operation answers
+  `ProviderNotReady` (fails closed); a provider outage at boot no longer
+  fails the parent tree (SSO-10).
+- A restart keeps the names, so a captured `Client` stays valid; the
+  supervisor registers itself under the client's name, so `stop` finds it.
+  `StartError` is no longer flattened: `supervised` reports
+  `describe_start_error`.
+
+## D31 — One bound on `complete_login` (wave 4, owner decision)
+
+- `complete_login` has one deadline (default 30 s, `with_login_timeout`):
+  each store call, the code exchange and any key refresh get only what is
+  left. A deadline reached before the exchange answers `LoginTimedOut` (the
+  login is consumed, nothing sent); one reached during installation answers
+  `CustodyUnconfirmed`. The previous worst case was about 34 s with no
+  single bound.
+
+## D32 — Failure classification by caller action (wave 4, WARDEN-R9)
+
+- `login_error_action` and `session_error_action` return a closed `Action`:
+  `Reauthenticate`, `RetryLater`, `Recover`, `FixConfiguration`,
+  `RejectRequest`. `Recover` is added to the report's four: a recovery value
+  is neither a retry of the same request nor a new login. No uncertain
+  outcome maps to `RetryLater` of the same request.
+- Transport failures carry `evidence: NotSent | MaybeSent` instead of
+  `sent: Bool`. Every error type has a `describe_*` function.
+
+## D33 — Closed, correlated telemetry (wave 4, WARDEN-R10)
+
+- `warden/observation` becomes `warden/telemetry`. HTTP events carry a
+  typed `TransportReason` and `Evidence` instead of a string class, plus
+  the caller's `correlation`. New `[warden, login]`, `[warden, refresh]`
+  and `[warden, logout]` events carry closed outcomes only: no identity,
+  token, code or claim.
+- `with_correlation(client, correlation)` is a pure view; Warden passes the
+  correlation to its HTTP Gun requests, so HTTP Gun's events for the same
+  provider calls carry it too (SSO-7, SMCP-9).
+
+## D34 — HTTP Gun's separate bounds (wave 4 follow-up)
+
+- Warden sets only HTTP Gun's request timeout; connect (with DNS and TLS),
+  pool checkout, idle read and idle pooled connection keep HTTP Gun's own
+  bounds (5 s, 5 s, 30 s, 60 s). A saturated pool or a dead connection
+  fails before the request deadline instead of using all of it.
+- Provider-cache calls wait one request timeout + 1 s (WARDEN-R11), so a
+  slow key refetch no longer reports `UnknownSigningKey` early.

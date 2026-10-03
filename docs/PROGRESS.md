@@ -252,6 +252,23 @@ conformance entry point with it; see [decisions.md](decisions.md#d7--pkce-s256-a
 - Found on the way: the raw-oidcc differential helper still called a module
   deleted in D13, masked by a stale compiled beam (fixed).
 
+### W13 — release API redesign (release wave 4, 2026-10-03)
+
+- WARDEN-R1 to R11 and the resource-server role (decisions D19 to D34):
+  opaque `Config` with `Duration` setters; `new`/`start`/`supervised` with
+  restart-stable names and background discovery; a `warden/store` port with
+  sealed records and leases; `access_token`/`refresh`/`recover_refresh`
+  with a 30 s margin and a 5 s shared wait; gleam_http login boundary with
+  Warden-owned binding cookie; RFC 7009 revocation on logout and a redacted
+  logout redirect; hardened introspection; `warden/resource` (RFC 9068);
+  `warden/testing`; `warden/telemetry` with correlation; one 30 s bound on
+  `complete_login`; HTTP Gun's separate connect, pool and idle bounds.
+- Fast gate: 174 tests, 18 negative compile cases + positive control,
+  consumer 11 tests. The Keycloak, node-oidc-provider, Dex/Hydra, browser
+  and conformance suites were migrated to the new API and compile, but were
+  not rerun in this wave (they need the local provider containers).
+- Migration guide: [migration-wave-4.md](migration-wave-4.md).
+
 ## Remaining limitations and gaps
 
 - Production readiness requires the design's release gates and an
@@ -259,9 +276,11 @@ conformance entry point with it; see [decisions.md](decisions.md#d7--pkce-s256-a
   W10, is not a substitute) (transport, protocol and
   claim rules, stores); none has been performed. Warden owns more of the
   protocol surface than an oidcc wrapper would. Not certified.
-- In-memory stores only: no durable custody, no multi-node replay authority.
+- Durable stores are an application adapter over `warden/store` (none is
+  shipped); a database writer can roll a sealed row back to an earlier copy
+  (D21).
 - Explicit gaps unchanged (design §4.8): PAR, JAR, DPoP, JWT-bearer, dynamic
-  registration, JARM/FAPI, revocation, device grant, token exchange,
+  registration, JARM/FAPI, device grant, token exchange,
   back/front-channel logout; encrypted ID tokens and signed request objects
   are disabled. Third-party initiated login has a route in the reference RP
   but no conformance verdict.

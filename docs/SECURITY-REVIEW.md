@@ -13,7 +13,7 @@ Four reviewers worked in parallel, each read-only on one trust boundary:
 | Transport (T)                      | `internal/transport.gleam`: SSRF, TLS, URL and response parsing, bounds, deadlines, send evidence |
 | Token verification (J)             | `internal/native/{jose,provider,client}.gleam`, identity acceptance in `warden.gleam`             |
 | Login and custody (F)              | `warden.gleam` flows, `internal/{callback,transaction_store,custody_store,call}.gleam`            |
-| Config, secrets, reference app (C) | `config.gleam`, `secure.gleam`, `observation.gleam`, secret handling, `consumer/`                 |
+| Config, secrets, reference app (C) | `config.gleam`, `secure.gleam`, `telemetry.gleam`, secret handling, `consumer/`                   |
 
 Reviewers confirmed findings by running code (minted tokens, local TLS
 servers, store probes) where they could. Each finding was then reproduced
