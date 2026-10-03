@@ -12,7 +12,7 @@
 //// - a declared `content-length` above the body limit is refused before
 ////   reading; any non-identity `content-encoding` is refused;
 //// - failures are mapped to closed classes; `NotSent` only when HTTP Gun
-////   reports `NotSubmitted`;
+////   reports `NotSent`;
 //// - observations (`observation.http_request`) carry only method, host,
 ////   path, status or failure class and duration.
 ////
@@ -22,8 +22,8 @@
 
 import exception
 import gleam/bit_array
-import gleam/dynamic.{type Dynamic}
 import gleam/erlang/atom.{type Atom}
+import gleam/erlang/process
 import gleam/http
 import gleam/http/request as http_request
 import gleam/int
@@ -39,7 +39,6 @@ import http_gun/config
 import http_gun/deadline
 import http_gun/destination
 import http_gun/error
-import http_gun/request_options
 import sinal
 import warden/observation
 
@@ -144,14 +143,14 @@ pub const max_request_body = 65_536
 // ---------------------------------------------------------------------------
 // Shared client
 
-/// A supervised HTTP Gun client, found through a stable key so that a
-/// supervisor restart (which starts a new client) is picked up.
+/// A supervised HTTP Gun client, found by name so that a supervisor restart
+/// (which starts a new client under the same name) is picked up.
 pub opaque type Pool {
-  Pool(key: Dynamic)
+  Pool(name: process.Name(http_gun.Message))
 }
 
 pub fn new_pool() -> Pool {
-  Pool(to_dynamic(#(atom.create("warden_http_pool"), make_ref())))
+  Pool(process.new_name("warden_http_pool"))
 }
 
 /// The supervisor child that owns the pool's HTTP Gun client.
@@ -159,26 +158,8 @@ pub fn pool_child(
   policy: Policy,
   pool: Pool,
 ) -> supervision.ChildSpecification(Nil) {
-  http_gun.child(settings(policy))
-  |> supervision.map_data(fn(client) {
-    persistent_term_put(pool.key, client)
-    Nil
-  })
-}
-
-/// Forget the pool's client (when the Warden client stops).
-pub fn release(pool: Pool) -> Nil {
-  let _ = persistent_term_erase(pool.key)
-  Nil
-}
-
-fn pooled_client(pool: Pool) -> Result(http_gun.Client, Nil) {
-  let missing = to_dynamic(atom.create("warden_http_pool_missing"))
-  let found = persistent_term_get(pool.key, missing)
-  case found == missing {
-    True -> Error(Nil)
-    False -> Ok(coerce(found))
-  }
+  http_gun.supervised(settings(policy), pool.name)
+  |> supervision.map_data(fn(_) { Nil })
 }
 
 // ---------------------------------------------------------------------------
@@ -219,15 +200,12 @@ fn run(policy: Policy, request: Request) -> Result(Response, Failure) {
   })
   use req <- result.try(to_http(request))
   case policy.pool {
-    Some(pool) ->
-      case pooled_client(pool) {
-        Ok(client) -> exchange(client, policy, req)
-        // The supervised client is not running (the Warden client stopped).
-        Error(Nil) -> not_sent(InternalError)
-      }
+    // A stopped supervised client answers `ClientClosed` and `NotSent`.
+    Some(pool) -> exchange(http_gun.named(pool.name), policy, req)
     None -> {
       use client <- result.try(
-        http_gun.start(settings(policy)) |> result.map_error(from_gun),
+        http_gun.start(settings(policy))
+        |> result.replace_error(Failure(NotSent, InternalError)),
       )
       exception.defer(fn() { http_gun.stop(client) }, fn() {
         exchange(client, policy, req)
@@ -241,54 +219,63 @@ fn exchange(
   policy: Policy,
   req: http_request.Request(BitArray),
 ) -> Result(Response, Failure) {
-  use budget <- result.try(
-    deadline.after(int.max(0, policy.timeout_ms)) |> result.map_error(from_gun),
+  let budget = deadline.after(int.max(0, policy.timeout_ms))
+  http_gun.with_response(
+    client |> http_gun.with_deadline(budget),
+    req,
+    from_gun,
+    fn(response) {
+      let headers = response.headers
+      use _ <- result.try(content_encoding(headers))
+      use _ <- result.try(declared_length(headers, policy.max_body))
+      use collected <- result.try(
+        body.collect(response.body, policy.max_body)
+        |> result.map_error(from_gun),
+      )
+      Ok(Response(response.status, headers, collected.bytes))
+    },
   )
-  let options =
-    request_options.Options(..request_options.default(), deadline: Some(budget))
-  http_gun.with_response_with_options(client, req, options, fn(response) {
-    let headers = response.headers
-    use _ <- result.try(content_encoding(headers))
-    use _ <- result.try(declared_length(headers, policy.max_body))
-    use collected <- result.try(
-      body.collect(response.body, policy.max_body)
-      |> result.map_error(from_gun),
-    )
-    Ok(Response(response.status, headers, collected.bytes))
-  })
-  |> result.map_error(from_gun)
-  |> result.flatten
 }
 
 fn settings(policy: Policy) -> config.Config {
-  let defaults = config.default()
-  config.Config(
-    ..defaults,
-    trust: case policy.trust {
+  let timeout = int.max(1, policy.timeout_ms)
+  let allowed = destination.default()
+  let allowed = case policy.allow_loopback {
+    True -> destination.allow_loopback(allowed)
+    False -> allowed
+  }
+  let allowed = case policy.allow_private {
+    True -> destination.allow_private(allowed)
+    False -> allowed
+  }
+  let allowed = case policy.allowed_hosts {
+    Some(hosts) -> destination.only_hosts(allowed, hosts)
+    None -> allowed
+  }
+  let configured =
+    config.default()
+    |> config.with_trust(case policy.trust {
       SystemTrust -> config.SystemTrust
       Anchors(ders) -> config.Anchors(ders)
-    },
-    deadline_ms: int.max(1, policy.timeout_ms),
-    connect_ms: int.max(1, policy.timeout_ms),
-    limits: config.Limits(
-      ..defaults.limits,
-      request_bytes: max_request_body,
-      head_bytes: policy.max_header_bytes,
-      header_count: policy.max_headers,
-      collect_bytes: policy.max_body,
-    ),
-    destination: destination.Policy(
-      allow_public: True,
-      allow_loopback: policy.allow_loopback,
-      allow_private: policy.allow_private,
-      allowed_hosts: policy.allowed_hosts,
-      resolver: option.map(policy.resolver, fn(resolve) {
-        fn(host, remaining) {
-          resolve(host, remaining) |> result.map(list.map(_, to_gun_address))
-        }
-      }),
-    ),
-  )
+    })
+    // One bound for every phase, as before: the request deadline, the
+    // connect (with DNS), the pool wait and the idle read all use it.
+    |> config.with_request_timeout(config.Milliseconds(timeout))
+    |> config.with_connect_timeout(timeout)
+    |> config.with_pool_timeout(timeout)
+    |> config.with_idle_timeout(config.Milliseconds(timeout))
+    |> config.with_max_request_body_bytes(max_request_body)
+    |> config.with_max_header_bytes(policy.max_header_bytes)
+    |> config.with_max_header_count(policy.max_headers)
+    |> config.with_max_response_body_bytes(policy.max_body)
+    |> config.with_destination(allowed)
+  case policy.resolver {
+    Some(resolve) ->
+      config.with_resolver(configured, fn(host, remaining) {
+        resolve(host, remaining) |> result.map(list.map(_, to_gun_address))
+      })
+    None -> configured
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -398,14 +385,33 @@ fn values(headers: List(#(String, String)), name: String) -> List(String) {
 // than what HTTP Gun reports (decision D17).
 
 fn from_gun(failure: error.Failure) -> Failure {
-  let stage = case failure.evidence {
-    error.NotSubmitted -> NotSent
-    error.MayHaveBeenSent -> Sent
+  let stage = case error.evidence(failure) {
+    error.NotSent -> NotSent
+    error.MaybeSent -> Sent
   }
-  let class = case failure.reason {
-    error.InvalidRequest(_) -> InvalidRequest
-    error.InvalidConfig(_) -> InternalError
-    error.DestinationRejected -> DestinationRejected
+  let class = case error.kind(failure) {
+    error.InvalidInput -> InvalidRequest
+    error.Refused -> DestinationRejected
+    error.TimedOut -> Timeout
+    error.Network -> network_class(error.reason(failure), stage)
+    error.TooLarge -> limit_class(error.reason(failure))
+    // `Kind` also holds the queue-full and closed-client reasons, which are
+    // internal errors here. A pool wait that expires stays a timeout, as it
+    // was while one deadline bounded the wait; that needs the reason.
+    error.Unavailable ->
+      case error.reason(failure) {
+        error.PoolTimeout -> Timeout
+        _ -> InternalError
+      }
+    error.CancelledLocally | error.Misuse | error.Playback -> InternalError
+  }
+  Failure(stage, class)
+}
+
+/// `Kind.Network` covers resolution and every transport cause; the cause
+/// decides the class.
+fn network_class(reason: error.Reason, stage: Stage) -> Class {
+  case reason {
     error.ResolutionFailed -> ResolutionFailed
     error.ConnectionFailed(cause) | error.RequestFailed(cause) ->
       case cause {
@@ -415,42 +421,34 @@ fn from_gun(failure: error.Failure) -> Failure {
         error.TransportTimeout -> Timeout
         error.HeaderLimitReached -> HeadersTooLarge
         error.ProtocolError | error.UnexpectedProtocol -> MalformedResponse
-        error.ConnectionReset
-        | error.PeerClosed
-        | error.PeerDraining
-        | error.UnknownTransport ->
-          case stage {
-            NotSent -> ConnectionFailed
-            Sent -> ReceiveFailed
-          }
+        // A cause HTTP Gun adds later is as uncertain as `UnknownTransport`.
+        _ -> uncertain_transport(stage)
       }
-    error.DeadlineExceeded | error.ReadTimeout -> Timeout
+    _ -> uncertain_transport(stage)
+  }
+}
+
+fn uncertain_transport(stage: Stage) -> Class {
+  case stage {
+    NotSent -> ConnectionFailed
+    Sent -> ReceiveFailed
+  }
+}
+
+/// `Kind.TooLarge` does not say which limit; the limit kind decides.
+fn limit_class(reason: error.Reason) -> Class {
+  case reason {
     error.LimitExceeded(kind:, ..) ->
       case kind {
         error.RequestBodyBytes
         | error.RequestHeaderBytes
         | error.RequestHeaderCount -> InvalidRequest
         error.ResponseHeaderBytes | error.ResponseHeaderCount -> HeadersTooLarge
-        error.ResponseChunkBytes
-        | error.ResponseQueueBytes
-        | error.CollectedBodyBytes -> BodyTooLarge
-        error.FixtureBytes -> InternalError
+        error.BufferedBytes | error.ResponseBodyBytes -> BodyTooLarge
+        _ -> InternalError
       }
-    error.AdmissionFull
-    | error.ClientClosed
-    | error.Cancelled
-    | error.ReadConflict
-    | error.WrongOwner
-    | error.Closed
-    | error.FixtureMissing
-    | error.FixtureIo(..)
-    | error.FixtureCorrupt
-    | error.FixtureVersion(_)
-    | error.FixtureExhausted
-    | error.FixtureMismatch(_)
-    | error.CaptureFailed(_) -> InternalError
+    _ -> InternalError
   }
-  Failure(stage, class)
 }
 
 fn not_sent(class: Class) -> Result(a, Failure) {
@@ -528,24 +526,6 @@ pub fn class_name(class: Class) -> String {
 
 // ---------------------------------------------------------------------------
 // OTP bindings
-
-@external(erlang, "persistent_term", "put")
-fn persistent_term_put(key: Dynamic, value: a) -> Dynamic
-
-@external(erlang, "persistent_term", "get")
-fn persistent_term_get(key: Dynamic, default: Dynamic) -> Dynamic
-
-@external(erlang, "persistent_term", "erase")
-fn persistent_term_erase(key: Dynamic) -> Bool
-
-@external(erlang, "erlang", "make_ref")
-fn make_ref() -> Dynamic
-
-@external(erlang, "gleam_stdlib", "identity")
-fn to_dynamic(value: a) -> Dynamic
-
-@external(erlang, "gleam_stdlib", "identity")
-fn coerce(value: Dynamic) -> a
 
 @external(erlang, "erlang", "monotonic_time")
 fn monotonic_time(unit: Atom) -> Int

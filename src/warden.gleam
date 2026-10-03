@@ -179,14 +179,18 @@ pub fn supervised(config: Config) -> supervision.ChildSpecification(Client) {
   })
 }
 
-/// Stop the client's supervisor and every process under it.
+/// Stop the client's supervisor and every process under it. Returns once the
+/// supervisor has exited, or after five seconds, so that no request started
+/// afterwards can reach the stopped HTTP client.
 pub fn stop(client: Client) -> Nil {
+  let monitor = process.monitor(client.supervisor)
   process.unlink(client.supervisor)
   process.send_abnormal_exit(client.supervisor, Shutdown)
-  case client.http.pool {
-    Some(pool) -> transport.release(pool)
-    None -> Nil
-  }
+  let _ =
+    process.new_selector()
+    |> process.select_specific_monitor(monitor, fn(_) { Nil })
+    |> process.selector_receive(5000)
+  Nil
 }
 
 type ExitReason {
@@ -241,27 +245,19 @@ pub fn start_with_clocks(
   // client's supervised, shared HTTP Gun client.
   let pool = transport.new_pool()
   let http = transport.Policy(..policy, pool: Some(pool))
-  let started =
-    start_supervised(
-      config,
-      clock,
-      monotonic,
-      transport.pool_child(policy, pool),
-      supervision.worker(fn() {
-        provider.start(provider_name, issuer, http, Some(discovered))
-        |> result.map(fn(started) { actor.Started(..started, data: Nil) })
-      }),
-      native.new(config, provider_handle, http, clock),
-      to_dynamic(provider_name),
-      http,
-    )
-  case started {
-    Ok(client) -> Ok(client)
-    Error(error) -> {
-      transport.release(pool)
-      Error(error)
-    }
-  }
+  start_supervised(
+    config,
+    clock,
+    monotonic,
+    transport.pool_child(policy, pool),
+    supervision.worker(fn() {
+      provider.start(provider_name, issuer, http, Some(discovered))
+      |> result.map(fn(started) { actor.Started(..started, data: Nil) })
+    }),
+    native.new(config, provider_handle, http, clock),
+    to_dynamic(provider_name),
+    http,
+  )
 }
 
 fn start_supervised(

@@ -182,8 +182,8 @@ cache with the result. The text below describes the removed oidcc path.
   and header hygiene, 64 KiB request cap, early refusal of an oversized
   declared length, content-encoding refusal), the failure mapping and
   observations. Each Warden client owns a supervised, shared HTTP Gun client
-  (first supervisor child; found through a stable key after restarts,
-  released by `warden.stop`); startup discovery uses a one-shot client.
+  (first supervisor child; found by name after restarts, gone when
+  `warden.stop` returns); startup discovery uses a one-shot client.
 
 ### D10 parity evidence (2026-09-30)
 

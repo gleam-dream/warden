@@ -60,7 +60,6 @@ fn with_pool(body: fn(transport.Policy, Pid) -> a) -> a {
   let result = body(transport.Policy(..policy(), pool: Some(pool)), sup)
   process.unlink(sup)
   process.kill(sup)
-  transport.release(pool)
   result
 }
 

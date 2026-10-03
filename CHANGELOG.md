@@ -41,3 +41,5 @@ and the evidence for each wave in [docs/PROGRESS.md](docs/PROGRESS.md).
 
 - `docs/PROGRESS.md` no longer lists D7 as an open decision; the decision
   register records it as resolved.
+- `warden.stop` returns once the supervisor has exited (at most five
+  seconds), so a request started afterwards fails as not sent.
