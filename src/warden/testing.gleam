@@ -1,12 +1,36 @@
 //// Test support: a scripted OpenID provider with its own test PKI, an
 //// in-memory record store, and a conformance check for store adapters.
 ////
-//// The provider serves discovery, keys, token (authorization code with
-//// PKCE S256, rotating refresh tokens, client credentials), userinfo,
-//// introspection, revocation and end-session over HTTPS on loopback. Its
-//// certificate chains to a root generated at start; `config` and `trusting`
-//// trust that root and allow loopback explicitly, so no production default
-//// changes. ID and access tokens are signed ES256 with gose.
+//// The provider serves discovery, keys, a scripted login page at
+//// `/authorize`, token (authorization code with PKCE S256, rotating
+//// refresh tokens, client credentials), userinfo, introspection,
+//// revocation and end-session over HTTPS on loopback. Its certificate
+//// chains to a root generated at start; `config` and `trusting` trust that
+//// root and allow loopback explicitly, so no production default changes.
+//// ID and access tokens are signed ES256 with gose.
+////
+//// ## Over HTTP
+////
+//// A test browser follows the application's login redirect to the
+//// provider (trusting `trust_anchor_pem`). `/authorize` signs in the user
+//// that `with_login` or `set_login` names (`test-user` by default, or the
+//// request's `login_hint`) and answers `303` to the callback with `code`,
+//// `state` and `iss` (a self-posting form for form-post). The application
+//// needs no test hook:
+////
+//// ```gleam
+//// let assert Ok(provider) =
+////   testing.start_provider(
+////     testing.provider_options() |> testing.with_login(testing.SignIn("ada")),
+////   )
+//// // The app runs `begin_login` and `login_response` in its /login route;
+//// // the browser follows /login -> provider /authorize -> app /callback.
+//// testing.set_login(provider, testing.Refuse("access_denied"))  // next login is cancelled
+//// ```
+////
+//// ## In process
+////
+//// A unit test that holds the `LoginRedirect` skips HTTP:
 ////
 //// ```gleam
 //// let assert Ok(provider) = testing.start_provider(testing.provider_options())
@@ -18,6 +42,14 @@
 //// let assert Ok(callback) = testing.authorize(provider, redirect, subject: "ada")
 //// let assert Ok(session) = warden.complete_login(client, callback)
 //// ```
+////
+//// ## Access tokens
+////
+//// `set_access_token_audiences` changes the `aud` of issued access tokens
+//// after start, so an application can name its own address once it
+//// listens. `revoke_access_token` revokes one token for introspection and
+//// userinfo; a local JWT validator (`warden/resource`) keeps accepting it
+//// until it expires, as RFC 9068 tokens carry no revocation channel.
 ////
 //// The provider mints tokens with keys it generated; nothing trusts them
 //// unless a configuration names the provider's issuer and root.
@@ -64,12 +96,27 @@ pub opaque type ProviderOptions {
     access_token_audiences: List(String),
     refresh_delay_ms: Int,
     scopes: List(String),
+    login: LoginDecision,
   )
+}
+
+/// What the provider's `/authorize` endpoint does with a browser that
+/// arrives there: the provider's login page, scripted.
+pub type LoginDecision {
+  /// Sign `subject` in and redirect back to the client with a code. When
+  /// the authorization request carries `login_hint` (Warden sends
+  /// `LoginOptions.login_hint`), that subject signs in instead, so one
+  /// provider serves several users at once.
+  SignIn(subject: String)
+  /// Redirect back with this OAuth error, as when the user cancels
+  /// (`"access_denied"`) or `prompt=none` finds no session
+  /// (`"login_required"`).
+  Refuse(error: String)
 }
 
 /// Defaults: client `warden-test` with a random secret, five-minute access
 /// tokens whose audience is the client id, no refresh delay, scopes
-/// `openid email profile`.
+/// `openid email profile`, and `/authorize` signing in `test-user`.
 pub fn provider_options() -> ProviderOptions {
   ProviderOptions(
     client_id: "warden-test",
@@ -78,7 +125,16 @@ pub fn provider_options() -> ProviderOptions {
     access_token_audiences: [],
     refresh_delay_ms: 0,
     scopes: ["openid", "email", "profile"],
+    login: SignIn("test-user"),
   )
+}
+
+/// What `/authorize` does; `set_login` changes it after start.
+pub fn with_login(
+  options: ProviderOptions,
+  decision: LoginDecision,
+) -> ProviderOptions {
+  ProviderOptions(..options, login: decision)
 }
 
 /// The one registered client. It authenticates with `client_secret_basic`
@@ -99,7 +155,9 @@ pub fn with_access_token_ttl(
   ProviderOptions(..options, access_token_ttl: whole_seconds(ttl))
 }
 
-/// `aud` of access tokens issued by the token endpoint.
+/// `aud` of access tokens issued by the token endpoint. Default: the client
+/// id. `set_access_token_audiences` changes it after start, for an audience
+/// that names an address known only once the application listens.
 pub fn with_access_token_audiences(
   options: ProviderOptions,
   audiences: List(String),
@@ -137,6 +195,9 @@ pub opaque type Provider {
 pub type RequestCounts {
   RequestCounts(
     discovery: Int,
+    /// Authorization requests, over HTTP or through `authorize`, whether
+    /// they signed someone in or not.
+    authorizations: Int,
     keys: Int,
     code_grants: Int,
     refresh_grants: Int,
@@ -267,6 +328,47 @@ pub fn revoke_refresh_tokens(provider: Provider, subject: String) -> Nil {
   })
 }
 
+/// Revoke one access token, as RFC 7009 revocation or an administrator
+/// would. Introspection then answers `active: false` and userinfo
+/// `invalid_token`.
+///
+/// A resource server that validates JWTs locally (`warden/resource`) does
+/// not see this: RFC 9068 tokens carry no revocation channel, so they stay
+/// valid until `exp`. A test that needs a revoked token refused at once
+/// uses introspection (`warden.introspect`, or `resource`'s introspection
+/// recipe); with local validation, use short lifetimes
+/// (`with_access_token_ttl`).
+pub fn revoke_access_token(provider: Provider, token: String) -> Nil {
+  transact(provider.state, fn(s) {
+    let access_tokens = case dict.get(s.access_tokens, token) {
+      Ok(grant) ->
+        dict.insert(s.access_tokens, token, AccessGrant(..grant, revoked: True))
+      Error(Nil) -> s.access_tokens
+    }
+    #(State(..s, access_tokens:), Nil)
+  })
+}
+
+/// `aud` of access tokens issued from now on (empty: the client id).
+/// Tokens issued earlier keep theirs.
+pub fn set_access_token_audiences(
+  provider: Provider,
+  audiences: List(String),
+) -> Nil {
+  transact(provider.state, fn(s) {
+    let options =
+      ProviderOptions(..s.options, access_token_audiences: audiences)
+    #(State(..s, options:), Nil)
+  })
+}
+
+/// What `/authorize` does from now on.
+pub fn set_login(provider: Provider, decision: LoginDecision) -> Nil {
+  transact(provider.state, fn(s) {
+    #(State(..s, options: ProviderOptions(..s.options, login: decision)), Nil)
+  })
+}
+
 /// Make the provider's clock run ahead (positive) or behind: issued tokens
 /// carry `iat` (and `auth_time`) shifted by `skew`.
 pub fn set_clock_skew(provider: Provider, skew: Duration) -> Nil {
@@ -286,10 +388,17 @@ pub fn rotate_signing_key(provider: Provider) -> Nil {
 
 // ===========================================================================
 // Browser front channel
+//
+// The provider serves `GET` and `POST /authorize` like a real login page
+// whose user always answers as `LoginDecision` says: a test browser follows
+// Warden's `login_url` there over HTTPS (trusting `trust_anchor_pem`) and
+// is redirected back to the application's callback. `authorize` takes the
+// same path in process, for tests that hold the `LoginRedirect`.
 
-/// Play the browser and the provider's login page: accept the authorization
-/// request in `redirect` for `subject` and return the callback request
-/// Warden expects (the query, or a form post, with the binding cookie).
+/// Play the browser and the provider's login page in process: accept the
+/// authorization request in `redirect` for `subject` and return the
+/// callback request Warden expects (the query, or a form post, with the
+/// binding cookie). `subject` overrides the provider's `LoginDecision`.
 pub fn authorize(
   provider: Provider,
   redirect: LoginRedirect,
@@ -305,60 +414,34 @@ pub fn authorize(
     uri.parse_query(query)
     |> result.replace_error(AuthorizationRefused("malformed query")),
   )
-  let param = fn(name) { list.key_find(params, name) }
-  use _ <- result.try(case param("client_id") {
-    Ok(id) if id == provider.options.client_id -> Ok(Nil)
-    _ -> Error(AuthorizationRefused("unknown client"))
-  })
-  use _ <- result.try(case param("code_challenge_method") {
-    Ok("S256") -> Ok(Nil)
-    _ -> Error(AuthorizationRefused("no S256 challenge"))
-  })
-  use challenge <- result.try(
-    param("code_challenge")
-    |> result.replace_error(AuthorizationRefused("no challenge")),
+  use front <- result.try(
+    authorization_front(provider.options.client_id, params)
+    |> result.map_error(AuthorizationRefused),
   )
-  use state <- result.try(
-    param("state") |> result.replace_error(AuthorizationRefused("no state")),
+  let outcome =
+    transact(provider.state, fn(s) {
+      let s = count_authorization(s)
+      case authorization_details(params) {
+        Error(reason) -> #(s, Error(reason))
+        Ok(details) -> {
+          let #(s, code) = grant_code(s, subject, front, details)
+          #(s, Ok(#(code, details.state, s.issuer)))
+        }
+      }
+    })
+  use #(code, state, issuer) <- result.try(
+    outcome |> result.map_error(AuthorizationRefused),
   )
-  use nonce <- result.try(
-    param("nonce") |> result.replace_error(AuthorizationRefused("no nonce")),
-  )
-  use redirect_uri <- result.try(
-    param("redirect_uri")
-    |> result.replace_error(AuthorizationRefused("no redirect_uri")),
-  )
-  let scopes = case param("scope") {
-    Ok(scope) -> string.split(scope, " ")
-    Error(Nil) -> []
-  }
-  let code = secure.random_token(24)
-  transact(provider.state, fn(s) {
-    let grant =
-      CodeGrant(
-        subject:,
-        nonce:,
-        challenge:,
-        redirect_uri:,
-        scopes:,
-        auth_time: now(s),
-      )
-    #(State(..s, codes: dict.insert(s.codes, code, grant)), Nil)
-  })
   let callback =
-    uri.query_to_string([
-      #("code", code),
-      #("state", state),
-      #("iss", provider.issuer),
-    ])
+    uri.query_to_string([#("code", code), #("state", state), #("iss", issuer)])
   use target <- result.try(
-    request.to(redirect_uri)
+    request.to(front.redirect_uri)
     |> result.replace_error(AuthorizationRefused("bad redirect_uri")),
   )
   let cookie = binding_cookie(redirect)
   let target = request.set_header(target, "cookie", cookie)
-  case param("response_mode") {
-    Ok("form_post") ->
+  case front.form_post {
+    True ->
       Ok(
         target
         |> request.set_method(http.Post)
@@ -368,12 +451,215 @@ pub fn authorize(
         )
         |> request.set_body(callback),
       )
-    _ ->
+    False ->
       Ok(
         request.Request(..target, query: Some(callback))
         |> request.set_body(""),
       )
   }
+}
+
+/// The parts of an authorization request that decide whether the provider
+/// may redirect back at all (RFC 6749 §4.1.2.1: never to an unverified
+/// redirect URI).
+type AuthorizationFront {
+  AuthorizationFront(redirect_uri: String, form_post: Bool)
+}
+
+type AuthorizationDetails {
+  AuthorizationDetails(
+    state: String,
+    nonce: String,
+    challenge: String,
+    scopes: List(String),
+    login_hint: Option(String),
+  )
+}
+
+fn authorization_front(
+  client_id: String,
+  params: List(#(String, String)),
+) -> Result(AuthorizationFront, String) {
+  let param = fn(name) { list.key_find(params, name) }
+  use _ <- result.try(case param("client_id") {
+    Ok(id) if id == client_id -> Ok(Nil)
+    _ -> Error("unknown client")
+  })
+  use redirect_uri <- result.try(
+    param("redirect_uri") |> result.replace_error("no redirect_uri"),
+  )
+  use _ <- result.try(case uri.parse(redirect_uri) {
+    Ok(uri.Uri(scheme: Some("https"), host: Some(_), fragment: None, ..))
+    | Ok(uri.Uri(scheme: Some("http"), host: Some(_), fragment: None, ..)) ->
+      Ok(Nil)
+    _ -> Error("bad redirect_uri")
+  })
+  Ok(AuthorizationFront(
+    redirect_uri:,
+    form_post: param("response_mode") == Ok("form_post"),
+  ))
+}
+
+fn authorization_details(
+  params: List(#(String, String)),
+) -> Result(AuthorizationDetails, String) {
+  let param = fn(name) { list.key_find(params, name) }
+  use _ <- result.try(case param("response_type") {
+    Ok("code") -> Ok(Nil)
+    _ -> Error("response_type is not code")
+  })
+  use _ <- result.try(case param("code_challenge_method") {
+    Ok("S256") -> Ok(Nil)
+    _ -> Error("no S256 challenge")
+  })
+  use challenge <- result.try(
+    param("code_challenge") |> result.replace_error("no challenge"),
+  )
+  use state <- result.try(param("state") |> result.replace_error("no state"))
+  use nonce <- result.try(param("nonce") |> result.replace_error("no nonce"))
+  let scopes = case param("scope") {
+    Ok(scope) -> string.split(scope, " ")
+    Error(Nil) -> []
+  }
+  let login_hint = case param("login_hint") {
+    Ok("") | Error(Nil) -> None
+    Ok(hint) -> Some(hint)
+  }
+  Ok(AuthorizationDetails(state:, nonce:, challenge:, scopes:, login_hint:))
+}
+
+fn count_authorization(state: State) -> State {
+  count(state, fn(c) {
+    RequestCounts(..c, authorizations: c.authorizations + 1)
+  })
+}
+
+/// Record a one-time code for `subject`.
+fn grant_code(
+  state: State,
+  subject: String,
+  front: AuthorizationFront,
+  details: AuthorizationDetails,
+) -> #(State, String) {
+  let code = secure.random_token(24)
+  let grant =
+    CodeGrant(
+      subject:,
+      nonce: details.nonce,
+      challenge: details.challenge,
+      redirect_uri: front.redirect_uri,
+      scopes: details.scopes,
+      auth_time: now(state),
+    )
+  #(State(..state, codes: dict.insert(state.codes, code, grant)), code)
+}
+
+/// `GET` or `POST /authorize`: the scripted login page.
+fn authorization_endpoint(
+  state: Subject(Message),
+  request: Request(String),
+) -> Response(String) {
+  let query = case request.method {
+    http.Post -> request.body
+    _ -> option.unwrap(request.query, "")
+  }
+  let params = uri.parse_query(query) |> result.unwrap([])
+  let answer =
+    transact(state, fn(s) {
+      let s = count_authorization(s)
+      case authorization_front(s.options.client_id, params) {
+        Error(reason) -> #(s, Error(reason))
+        Ok(front) -> {
+          let state = list.key_find(params, "state")
+          let #(s, callback) = case authorization_details(params) {
+            Error(_) -> #(s, error_callback("invalid_request", state))
+            Ok(details) ->
+              case s.options.login {
+                Refuse(error:) -> #(s, error_callback(error, state))
+                SignIn(subject:) -> {
+                  let subject = option.unwrap(details.login_hint, subject)
+                  let #(s, code) = grant_code(s, subject, front, details)
+                  #(s, [#("code", code), #("state", details.state)])
+                }
+              }
+          }
+          #(s, Ok(#(front, list.append(callback, [#("iss", s.issuer)]))))
+        }
+      }
+    })
+  case answer {
+    // Never redirect to an unverified client or redirect URI.
+    Error(reason) ->
+      response.new(400)
+      |> response.set_header("content-type", "text/plain")
+      |> response.set_header("cache-control", "no-store")
+      |> response.set_body("authorization refused: " <> reason)
+    Ok(#(front, callback)) ->
+      case front.form_post {
+        True -> form_post_page(front.redirect_uri, callback)
+        False -> {
+          let separator = case string.contains(front.redirect_uri, "?") {
+            True -> "&"
+            False -> "?"
+          }
+          response.new(303)
+          |> response.set_header(
+            "location",
+            front.redirect_uri <> separator <> uri.query_to_string(callback),
+          )
+          |> response.set_header("cache-control", "no-store")
+          |> response.set_body("")
+        }
+      }
+  }
+}
+
+fn error_callback(
+  error: String,
+  state: Result(String, Nil),
+) -> List(#(String, String)) {
+  case state {
+    Ok(state) -> [#("error", error), #("state", state)]
+    Error(Nil) -> [#("error", error)]
+  }
+}
+
+/// OAuth 2.0 Form Post Response Mode: a page that posts the response to the
+/// redirect URI. A scripted browser posts the form's fields itself.
+fn form_post_page(
+  redirect_uri: String,
+  fields: List(#(String, String)),
+) -> Response(String) {
+  let inputs =
+    list.map(fields, fn(field) {
+      "<input type=\"hidden\" name=\""
+      <> html_escape(field.0)
+      <> "\" value=\""
+      <> html_escape(field.1)
+      <> "\">"
+    })
+    |> string.concat
+  let body =
+    "<!doctype html><html><body onload=\"document.forms[0].submit()\">"
+    <> "<form method=\"post\" action=\""
+    <> html_escape(redirect_uri)
+    <> "\">"
+    <> inputs
+    <> "<noscript><button type=\"submit\">Continue</button></noscript>"
+    <> "</form></body></html>"
+  response.new(200)
+  |> response.set_header("content-type", "text/html; charset=utf-8")
+  |> response.set_header("cache-control", "no-store")
+  |> response.set_body(body)
+}
+
+fn html_escape(text: String) -> String {
+  text
+  |> string.replace("&", "&amp;")
+  |> string.replace("<", "&lt;")
+  |> string.replace(">", "&gt;")
+  |> string.replace("\"", "&quot;")
+  |> string.replace("'", "&#39;")
 }
 
 /// The browser's binding cookie as Warden set it.
@@ -716,7 +1002,7 @@ fn initial_state(options: ProviderOptions) -> State {
     refresh_tokens: dict.new(),
     access_tokens: dict.new(),
     skew: 0,
-    counts: RequestCounts(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0),
+    counts: RequestCounts(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0),
   )
 }
 
@@ -778,6 +1064,8 @@ fn handle(
         ]),
       )
     }
+    http.Get, "/authorize" | http.Post, "/authorize" ->
+      authorization_endpoint(state, request)
     http.Post, "/token" -> token_endpoint(state, request)
     http.Get, "/userinfo" -> userinfo_endpoint(state, request)
     http.Post, "/introspect" -> introspection_endpoint(state, request)

@@ -147,6 +147,34 @@ pub fn caller_owned_store_adapter_test() {
   testing.stop_provider(provider)
 }
 
+/// One client, two registered callback addresses: a login picks one from
+/// the configured allowlist; any other URI fails closed.
+pub fn login_chooses_a_registered_redirect_uri_test() {
+  let assert Ok(provider) = testing.start_provider(testing.provider_options())
+  let admin = "https://admin.app.test/callback"
+  let assert Ok(client) =
+    warden.new(
+      testing.config(provider, "https://app.test/callback")
+      |> config.with_allowed_redirect_uris([admin]),
+    )
+  let assert Ok(Nil) = warden.start(client)
+  let options = fn(uri) {
+    warden.LoginOptions(..warden.default_login(), redirect_uri: Some(uri))
+  }
+  let assert Ok(redirect) =
+    warden.begin_login(client, request.new(), options(admin))
+  let assert Ok(callback) =
+    testing.authorize(provider, redirect, subject: "ada")
+  assert callback.host == "admin.app.test"
+  let assert Ok(_) = warden.complete_login(client, callback)
+  let assert Error(error) =
+    warden.begin_login(client, request.new(), options(admin <> "/"))
+  assert error == warden.InvalidLoginOption(warden.RedirectUriNotAllowed)
+  assert warden.login_error_action(error) == warden.FixConfiguration
+  warden.stop(client)
+  testing.stop_provider(provider)
+}
+
 pub fn login_errors_map_to_application_failures_test() {
   let assert web.RetryLogin(_) = web.login_failure(warden.LoginReplayed)
   let assert web.BadRequest(_) =

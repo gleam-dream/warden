@@ -59,6 +59,8 @@ pub type Settings {
     client_id: String,
     /// Empty unless `mode` is `RelyingParty`.
     redirect_uri: String,
+    /// Further redirect URIs a login may choose, matched exactly.
+    allowed_redirect_uris: List(String),
     authentication: Authentication,
     /// `service_client` was given a public client.
     service_without_credentials: Bool,

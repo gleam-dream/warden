@@ -35,6 +35,13 @@
 //// | `sub` | required | |
 //// | scopes | every required scope present | `with_required_scopes` |
 ////
+//// Local validation cannot see revocation: a JWT access token stays valid
+//// until `exp` even after the provider revoked it. A resource server that
+//// must refuse a revoked token at once uses introspection
+//// (`warden.introspect`, the second recipe below); otherwise keep access
+//// tokens short-lived. `warden/testing.revoke_access_token` shows both
+//// sides in a test.
+////
 //// ## With Relay
 ////
 //// Relay's verifier takes a function from its `BearerToken` to an

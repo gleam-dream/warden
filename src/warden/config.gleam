@@ -28,6 +28,7 @@
 ////
 //// | Setting | Default | Setter |
 //// | --- | --- | --- |
+//// | redirect URI | the one given to `new` | `with_allowed_redirect_uris` (exact match) |
 //// | scopes | `openid` | `with_scopes` |
 //// | ID-token algorithms | RS256, PS256, ES256, EdDSA (`none` and HMAC unrepresentable) | `with_signing_algorithms` |
 //// | response mode | query | `with_response_mode` |
@@ -321,6 +322,7 @@ fn base(
     issuer:,
     client_id:,
     redirect_uri: "",
+    allowed_redirect_uris: [],
     authentication: to_authentication(authentication),
     service_without_credentials: False,
     scopes: [],
@@ -373,6 +375,23 @@ fn to_authentication(
 
 // ---------------------------------------------------------------------------
 // Setters
+
+/// Further redirect URIs a login may choose with
+/// `warden.LoginOptions(redirect_uri: Some(uri), ..)`, for an application
+/// served under several registered callback addresses. The URI given to
+/// `new` stays the default and is always allowed.
+///
+/// A login's URI must equal one of these strings exactly: no prefix,
+/// wildcard, port, case or percent-encoding normalisation. Anything else
+/// fails the login with `InvalidLoginOption(RedirectUriNotAllowed)`. Each
+/// URI must also be registered at the provider. Only a relying party
+/// (`new`) takes them.
+pub fn with_allowed_redirect_uris(
+  config: Config,
+  uris: List(String),
+) -> Config {
+  Settings(..config, allowed_redirect_uris: list.unique(uris))
+}
 
 /// Scopes requested at every login, in addition to `openid`.
 pub fn with_scopes(config: Config, scopes: List(String)) -> Config {
@@ -577,6 +596,12 @@ pub type ConfigError {
   /// The redirect URI must be absolute, without fragment, and `https` unless
   /// its host is a loopback address or `localhost`.
   InvalidRedirectUri
+  /// A URI given to `with_allowed_redirect_uris` breaks the redirect URI
+  /// rule above.
+  InvalidAllowedRedirectUri(String)
+  /// `with_allowed_redirect_uris` on a `service_client` or
+  /// `resource_server`, which have no login.
+  AllowedRedirectUrisNeedLogin
   /// A scope token contains a byte outside RFC 6749 §3.3 or is empty.
   InvalidScope(String)
   NoSigningAlgorithms
@@ -615,6 +640,10 @@ pub fn validate(config: Config) -> Result(Nil, List(ConfigError)) {
     check(
       !relying_party || valid_redirect_uri(config.redirect_uri),
       InvalidRedirectUri,
+    ),
+    check(
+      relying_party || config.allowed_redirect_uris == [],
+      AllowedRedirectUrisNeedLogin,
     ),
     check(config.signing_algorithms != [], NoSigningAlgorithms),
     check(
@@ -674,6 +703,10 @@ pub fn validate(config: Config) -> Result(Nil, List(ConfigError)) {
     config.scopes
     |> list.filter(fn(scope) { !valid_scope(scope) })
     |> list.map(InvalidScope)
+  let redirect_errors =
+    config.allowed_redirect_uris
+    |> list.filter(fn(uri) { !valid_redirect_uri(uri) })
+    |> list.map(InvalidAllowedRedirectUri)
   let host_errors = case config.allowed_hosts {
     None -> []
     Some(hosts) ->
@@ -681,7 +714,14 @@ pub fn validate(config: Config) -> Result(Nil, List(ConfigError)) {
       |> list.filter(fn(host) { !valid_host(host) })
       |> list.map(InvalidAllowedHost)
   }
-  case list.flatten([option.values(checks), scope_errors, host_errors]) {
+  case
+    list.flatten([
+      option.values(checks),
+      redirect_errors,
+      scope_errors,
+      host_errors,
+    ])
+  {
     [] -> Ok(Nil)
     errors -> Error(errors)
   }
@@ -706,6 +746,12 @@ pub fn describe_config_error(error: ConfigError) -> String {
     InvalidClientId -> "the client id must be 1 to 512 characters"
     InvalidRedirectUri ->
       "the redirect URI must be absolute, without fragment, and https unless its host is loopback"
+    InvalidAllowedRedirectUri(uri) ->
+      "the allowed redirect URI "
+      <> string.inspect(uri)
+      <> " must be absolute, without fragment, and https unless its host is loopback"
+    AllowedRedirectUrisNeedLogin ->
+      "with_allowed_redirect_uris needs a relying party (config.new)"
     InvalidScope(scope) ->
       "the scope " <> string.inspect(scope) <> " is not an RFC 6749 scope token"
     NoSigningAlgorithms ->

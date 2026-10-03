@@ -685,6 +685,12 @@ pub type LoginOptions {
     /// Extension parameters, such as RFC 8707 `resource`. Reserved
     /// OAuth/OIDC parameter names are rejected.
     extra_parameters: List(#(String, String)),
+    /// The redirect URI for this login. `None` uses the one configured with
+    /// `config.new`; `Some(uri)` must equal that URI or one given to
+    /// `config.with_allowed_redirect_uris` exactly, or the login fails with
+    /// `InvalidLoginOption(RedirectUriNotAllowed)`. The callback is
+    /// exchanged with the same URI.
+    redirect_uri: Option(String),
   )
 }
 
@@ -697,6 +703,7 @@ pub fn default_login() -> LoginOptions {
     acr_values: [],
     ui_locales: [],
     extra_parameters: [],
+    redirect_uri: None,
   )
 }
 
@@ -749,6 +756,9 @@ pub type LoginOptionProblem {
   /// A login option value longer than 2 KiB.
   OptionTooLong(String)
   InvalidMaxAge
+  /// `redirect_uri` is neither the configured redirect URI nor one of
+  /// `config.with_allowed_redirect_uris`, compared exactly.
+  RedirectUriNotAllowed
 }
 
 const max_option_bytes = 2048
@@ -777,6 +787,10 @@ pub fn begin_login(
   use extension <- result.try(
     login_extension(options) |> result.map_error(InvalidLoginOption),
   )
+  use redirect_uri <- result.try(
+    login_redirect_uri(client.settings, options.redirect_uri)
+    |> result.map_error(InvalidLoginOption),
+  )
   use metadata <- result.try(
     native.metadata(client.backend)
     |> result.map_error(fn(f) { LoginProviderUnavailable(provider_failure(f)) }),
@@ -792,7 +806,6 @@ pub fn begin_login(
   let state = secure.random_token(32)
   let nonce = secure.random_token(32)
   let verifier = secure.random_token(32)
-  let redirect_uri = client.settings.redirect_uri
   let scopes =
     ["openid", ..client.settings.scopes]
     |> list.append(options.scopes)
@@ -848,6 +861,26 @@ pub fn begin_login(
       ))
     Error(logins.PutFull) -> Error(TooManyPendingLogins)
     Error(logins.PutFailed) -> Error(LoginStoreUnavailable)
+  }
+}
+
+/// The configured redirect URI, or the login's choice when it is exactly
+/// one the configuration allows. No normalisation: a URI that differs in
+/// any byte (case, port, trailing slash, encoding) is refused.
+fn login_redirect_uri(
+  settings: Settings,
+  chosen: Option(String),
+) -> Result(String, LoginOptionProblem) {
+  case chosen {
+    None -> Ok(settings.redirect_uri)
+    Some(uri) ->
+      case
+        uri == settings.redirect_uri
+        || list.contains(settings.allowed_redirect_uris, uri)
+      {
+        True -> Ok(uri)
+        False -> Error(RedirectUriNotAllowed)
+      }
   }
 }
 
@@ -1722,6 +1755,8 @@ pub fn describe_login_error(error: LoginError) -> String {
           "invalid value for " <> string.inspect(name)
         OptionTooLong(name) -> string.inspect(name) <> " is longer than 2 KiB"
         InvalidMaxAge -> "max_age is negative"
+        RedirectUriNotAllowed ->
+          "the redirect URI is not the configured one or in config.with_allowed_redirect_uris (exact match)"
       }
     LoginNotConfigured -> "this client is not configured for login"
     LoginProviderUnavailable(failure) ->
