@@ -190,7 +190,7 @@ pub fn metadata_addresses_are_refused_with_private_permission_test() {
 pub fn a_warden_client_owns_and_releases_its_pool_test() {
   let provider = support.provider_start(support.Standard)
   let client = warden_login_test.start(warden_login_test.settings(provider))
-  let http = warden.http_policy(client)
+  let http = client.http
   let assert Some(_) = http.pool
   let assert Ok(response) =
     get(

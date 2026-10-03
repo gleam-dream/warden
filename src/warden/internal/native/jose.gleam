@@ -120,6 +120,87 @@ pub fn verify_id_token(
   Ok(claims)
 }
 
+/// What an access token must satisfy (RFC 9068 §4).
+pub type AccessExpectations {
+  AccessExpectations(
+    issuer: String,
+    audience: String,
+    /// `aud` must be exactly `[audience]`; otherwise it must contain it.
+    exact_audience: Bool,
+    algorithms: List(String),
+    /// The header `typ` must be `at+jwt` (or `application/at+jwt`).
+    require_type: Bool,
+    now: Timestamp,
+    tolerance: Int,
+  )
+}
+
+/// Verify a JWT access token and return its claims. Order: refuse
+/// encrypted tokens, `none` and algorithms outside the allowlist before
+/// touching keys; check `typ`; verify the signature and `iss`, `exp`
+/// (strictly), `nbf` and `iat` (with tolerance); then the audience policy and
+/// the required `sub` and `iat`.
+pub fn verify_access_token(
+  token: String,
+  keys: JwkSet,
+  expect: AccessExpectations,
+) -> Result(Dynamic, Rejection) {
+  use header <- result.try(protected_header(token))
+  use _ <- result.try(case header.alg {
+    "none" -> reject("alg_none")
+    alg ->
+      case list.contains(expect.algorithms, alg) {
+        True -> Ok(Nil)
+        False -> reject("unsupported_algorithm")
+      }
+  })
+  use _ <- result.try(
+    case expect.require_type, option.map(header.typ, string.lowercase) {
+      False, _ -> Ok(Nil)
+      True, Some("at+jwt") | True, Some("application/at+jwt") -> Ok(Nil)
+      True, _ -> reject("token_type")
+    },
+  )
+  use verified <- result.try(verify_signed(
+    token,
+    keys,
+    Expectations(
+      issuer: expect.issuer,
+      client_id: expect.audience,
+      algorithms: expect.algorithms,
+      nonce: None,
+      access_token: None,
+      now: expect.now,
+      tolerance: expect.tolerance,
+    ),
+    Some(expect.issuer),
+    Some(expect.audience),
+    require_exp: True,
+  ))
+  use claims <- result.try(
+    jwt.decode(verified, decode.dynamic)
+    |> result.replace_error(Rejection("malformed", None)),
+  )
+  use _ <- result.try(case protocol.audiences(claims), expect.exact_audience {
+    [audience], True if audience == expect.audience -> Ok(Nil)
+    _, True -> reject("audience_mismatch")
+    audiences, False ->
+      case list.contains(audiences, expect.audience) {
+        True -> Ok(Nil)
+        False -> reject("audience_mismatch")
+      }
+  })
+  use _ <- result.try(case protocol.string_claim(claims, "sub") {
+    Some(sub) if sub != "" -> Ok(Nil)
+    _ -> missing("sub")
+  })
+  use _ <- result.try(case protocol.int_claim(claims, "iat") {
+    Some(_) -> Ok(Nil)
+    None -> missing("iat")
+  })
+  Ok(claims)
+}
+
 /// A claim that may be absent; when present it must be a string. A present
 /// value of another type is an error, never treated as absent.
 fn optional_string(
@@ -266,7 +347,7 @@ fn rejection(error: jwt.JwtError) -> Rejection {
 }
 
 type Header {
-  Header(alg: String, kid: Option(String))
+  Header(alg: String, kid: Option(String), typ: Option(String))
 }
 
 /// The JOSE protected header of a compact token. A five-part token is a JWE;
@@ -282,14 +363,22 @@ fn protected_header(token: String) -> Result(Header, Rejection) {
           // Warden understands no critical header extensions, so any `crit`
           // member, even `null`, is refused (RFC 7515 §4.1.11).
           use crit <- decode.optional_field("crit", False, decode.success(True))
-          use <- bool.guard(crit, decode.failure(Header("", None), "crit"))
+          use <- bool.guard(
+            crit,
+            decode.failure(Header("", None, None), "crit"),
+          )
           use alg <- decode.field("alg", decode.string)
           use kid <- decode.optional_field(
             "kid",
             None,
             decode.optional(decode.string),
           )
-          decode.success(Header(alg:, kid:))
+          use typ <- decode.optional_field(
+            "typ",
+            None,
+            decode.optional(decode.string),
+          )
+          decode.success(Header(alg:, kid:, typ:))
         })
         |> result.replace_error(Nil)
       })

@@ -4,9 +4,11 @@
 //// to that transaction. Client assertions Warden sends are verified
 //// independently by panva/jose at the provider.
 
+import gleam/http/request
 import gleam/list
-import gleam/option.{None, Some}
+import gleam/option.{Some}
 import gleam/string
+import gleam/time/duration
 import warden
 import warden/config
 import warden_test_support as support
@@ -18,7 +20,7 @@ const secret = "warden-node-disposable-secret-0123456789"
 pub fn settings(
   client_id: String,
   authentication: config.ClientAuthentication,
-) -> config.Settings {
+) -> config.Config {
   config.new(
     issuer:,
     client_id:,
@@ -30,10 +32,8 @@ pub fn settings(
   |> config.with_destinations(config.AllowLoopbackForTesting)
 }
 
-pub fn start(settings: config.Settings) -> warden.Client {
-  let assert Ok(validated) = config.validate(settings)
-  let assert Ok(client) = warden.start(validated)
-  client
+pub fn start(config: config.Config) -> warden.Client {
+  support.start_client(config)
 }
 
 pub fn basic() -> warden.Client {
@@ -43,16 +43,13 @@ pub fn basic() -> warden.Client {
 pub fn attempt(
   client: warden.Client,
   user: String,
-) -> Result(warden.LoginCompletion, warden.LoginError) {
+) -> Result(warden.Session, warden.LoginError) {
   let options =
     warden.LoginOptions(..warden.default_login(), login_hint: Some(user))
-  let assert Ok(redirect) = warden.begin_login(client, None, options)
-  let assert Ok(support.Query(query)) = support.authorize(redirect.url, issuer)
-  warden.complete_login(
-    client,
-    warden.QueryCallback(query),
-    Some(redirect.browser_binding),
-  )
+  let assert Ok(redirect) = warden.begin_login(client, request.new(), options)
+  let assert Ok(support.Query(query)) =
+    support.authorize(warden.login_url(redirect), issuer)
+  warden.complete_login(client, support.query_callback(redirect, query))
 }
 
 /// The hostile ID-token corpus. Expected Warden outcomes; `"ok"` means a
@@ -83,11 +80,9 @@ pub fn corpus() -> List(#(String, String)) {
   ]
 }
 
-pub fn outcome(
-  result: Result(warden.LoginCompletion, warden.LoginError),
-) -> String {
+pub fn outcome(result: Result(warden.Session, warden.LoginError)) -> String {
   case result {
-    Ok(warden.LoginCompleted(_)) -> "ok"
+    Ok(_) -> "ok"
     Error(warden.IdentityRejected(problem)) -> string.inspect(problem)
     other -> "unexpected " <> string.inspect(other)
   }
@@ -122,15 +117,11 @@ pub fn form_post_test() {
       |> config.with_response_mode(config.FormPost),
     )
   let assert Ok(redirect) =
-    warden.begin_login(client, None, warden.default_login())
+    warden.begin_login(client, request.new(), warden.default_login())
   let assert Ok(support.FormPost(body)) =
-    support.authorize(redirect.url, issuer)
-  let assert Ok(warden.LoginCompleted(_)) =
-    warden.complete_login(
-      client,
-      warden.FormPostCallback(body),
-      Some(redirect.browser_binding),
-    )
+    support.authorize(warden.login_url(redirect), issuer)
+  let assert Ok(_) =
+    warden.complete_login(client, support.form_callback(redirect, body))
   warden.stop(client)
 }
 
@@ -160,7 +151,7 @@ pub fn client_authentication_methods_test() {
   list.each(cases, fn(c) {
     support.node_reset()
     let client = start(settings(c.0, c.1))
-    let assert Ok(warden.LoginCompleted(_)) = attempt(client, "alice")
+    let assert Ok(_) = attempt(client, "alice")
     let log = support.node_log()
     assert log == [#("authorization_code", c.0, c.2)]
     warden.stop(client)
@@ -172,30 +163,22 @@ pub fn refresh_cases_through_warden_test() {
   let client =
     start(
       settings("warden-rp", config.ClientSecretBasic(config.secret(secret)))
-      |> config.with_transport(
-        config.Transport(
-          ..config.default_transport(),
-          trust: config.TrustAnchorsPem(support.ca_pem()),
-          destinations: config.AllowLoopbackForTesting,
-          request_timeout_ms: 800,
-        ),
-      ),
+      |> config.with_request_timeout(duration.milliseconds(800)),
     )
   let session = fn() {
-    let assert Ok(warden.LoginCompleted(s)) = attempt(client, "alice")
+    let assert Ok(s) = attempt(client, "alice")
     s
   }
   // Present ID token, rotation.
   let s = session()
-  let assert Ok(warden.RefreshCompleted(s2)) = warden.refresh_session(client, s)
-  let assert Ok(warden.RefreshCompleted(_)) = warden.refresh_session(client, s2)
+  let assert Ok(a2) = warden.refresh(client, s)
+  let assert Ok(_) = warden.refresh(client, a2.session)
   // Absent ID token: OIDC Core §12.2 allows the omission; identity retained.
   let s = session()
   support.node_next("refresh_token", [support.NodeOmitIdToken])
-  case warden.refresh_session(client, s) {
-    Ok(warden.RefreshCompleted(refreshed)) -> {
-      let assert Ok(warden.RefreshCompleted(_)) =
-        warden.refresh_session(client, refreshed)
+  case warden.refresh(client, s) {
+    Ok(refreshed) -> {
+      let assert Ok(_) = warden.refresh(client, refreshed.session)
       Nil
     }
     other -> panic as string.inspect(other)
@@ -203,21 +186,20 @@ pub fn refresh_cases_through_warden_test() {
   // Omitted refresh token: retained, and the provider still accepts it.
   let s = session()
   support.node_next("refresh_token", [support.NodeDropRefreshToken])
-  let assert Ok(warden.RefreshCompleted(s2)) = warden.refresh_session(client, s)
-  let r = warden.refresh_session(client, s2)
+  let assert Ok(a2) = warden.refresh(client, s)
+  let r = warden.refresh(client, a2.session)
   assert outcome_refresh(r) == "completed-or-provider-rejected"
   // Changed nonce continuity.
   let s = session()
   support.node_next("refresh_token", [support.NodeIdToken("changed_nonce")])
-  let assert Ok(warden.RefreshResponseQuarantined(
+  let assert Error(warden.RefreshQuarantined(warden.ResponseRejected(
     warden.RefreshedNonceMismatch,
-    _,
-  )) = warden.refresh_session(client, s)
+  ))) = warden.refresh(client, s)
   // Response lost after the provider rotated.
   let s = session()
   support.node_next("refresh_token", [support.NodeDelayMs(2000)])
-  let assert Ok(warden.RefreshProviderQuarantined(_)) =
-    warden.refresh_session(client, s)
+  let assert Error(warden.RefreshQuarantined(warden.ProviderOutcomeUnknown)) =
+    warden.refresh(client, s)
   warden.stop(client)
 }
 
@@ -225,13 +207,10 @@ pub fn refresh_cases_through_warden_test() {
 /// its successor (rotation is server-side), so the retained token may be
 /// rejected afterwards. Either outcome is a definite, correctly classified
 /// result; neither is silent success.
-fn outcome_refresh(
-  r: Result(warden.RefreshResult, warden.RefreshError),
-) -> String {
+fn outcome_refresh(r: Result(warden.Access, warden.SessionError)) -> String {
   case r {
-    Ok(warden.RefreshCompleted(_)) -> "completed-or-provider-rejected"
-    Ok(warden.RefreshRejectedByEndpoint(warden.InvalidGrant)) ->
-      "completed-or-provider-rejected"
+    Ok(_) -> "completed-or-provider-rejected"
+    Error(warden.RefreshRevoked) -> "completed-or-provider-rejected"
     other -> string.inspect(other)
   }
 }

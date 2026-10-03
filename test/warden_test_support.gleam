@@ -3,11 +3,17 @@
 import gleam/dict.{type Dict}
 import gleam/dynamic.{type Dynamic}
 import gleam/dynamic/decode
+import gleam/http
+import gleam/http/request
 import gleam/json
+import gleam/option
 import gleam/result
 import oidcc_transport
+import warden
+import warden/config
 import warden/internal/secure
 import warden/internal/transport
+import warden/testing
 
 pub type BrowserResult {
   Query(String)
@@ -272,3 +278,39 @@ pub fn mint(
 /// Extra or replacement integer ID-token claims for every issued ID token.
 @external(erlang, "warden_test_provider", "set_claims")
 pub fn set_int_claims(provider: Provider, claims: Dict(String, Int)) -> Nil
+
+/// A GET callback with this raw query and the binding cookie of `redirect`.
+pub fn query_callback(
+  redirect: warden.LoginRedirect,
+  query: String,
+) -> request.Request(String) {
+  request.Request(
+    ..testing.browser_request(redirect),
+    query: option.Some(query),
+  )
+}
+
+/// A form-post callback with this body and the binding cookie of `redirect`.
+pub fn form_callback(
+  redirect: warden.LoginRedirect,
+  body: String,
+) -> request.Request(String) {
+  testing.browser_request(redirect)
+  |> request.set_method(http.Post)
+  |> request.set_header("content-type", "application/x-www-form-urlencoded")
+  |> request.set_body(body)
+}
+
+/// The same request without any cookie (no browser binding).
+pub fn without_binding(
+  callback: request.Request(String),
+) -> request.Request(String) {
+  request.Request(..callback, headers: [])
+}
+
+/// A validated client from a configuration, started.
+pub fn start_client(config: config.Config) -> warden.Client {
+  let assert Ok(client) = warden.new(config)
+  let assert Ok(Nil) = warden.start(client)
+  client
+}

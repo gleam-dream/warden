@@ -5,13 +5,13 @@ import gleam/crypto
 import gleam/dynamic/decode
 import gleam/erlang/atom
 import gleam/http
+import gleam/http/request as http_request
 import gleam/http/response
 import gleam/list
 import gleam/option.{type Option, None, Some}
 import gleam/result
 import gleam/string
 import warden
-import warden/config
 import warden_reference/protect
 import wisp.{type Request, type Response}
 
@@ -19,15 +19,11 @@ pub type Context {
   Context(
     client: warden.Client,
     issuer: String,
-    response_mode: config.ResponseMode,
-    login_lifetime: Int,
     post_logout_redirect_uri: String,
     /// This application's origin, for the same-origin check on POSTs.
     origin: String,
   )
 }
-
-const binding_cookie = protect.binding_cookie
 
 const session_cookie = protect.session_cookie
 
@@ -45,10 +41,10 @@ fn route(request: Request, context: Context) -> Response {
     http.Get, ["login"] -> login(request, context, None)
     http.Get, ["initiate-login"] -> third_party_initiated(request, context)
     http.Get, ["callback"] ->
-      callback(request, context, warden.QueryCallback(query_string(request)))
+      callback(request, context, http_request.set_body(request, ""))
     http.Post, ["callback"] -> {
       use body <- wisp.require_string_body(request)
-      callback(request, context, warden.FormPostCallback(body))
+      callback(request, context, http_request.set_body(request, body))
     }
     http.Post, ["refresh"] -> {
       use <- same_origin(request, context)
@@ -83,24 +79,19 @@ fn same_origin(
   }
 }
 
-fn query_string(request: Request) -> String {
-  option.unwrap(request.query, "")
-}
-
 // --- Login -------------------------------------------------------------------
 
 fn login(request: Request, context: Context, hint: Option(String)) -> Response {
-  let binding =
-    wisp.get_cookie(request, binding_cookie, wisp.PlainText)
-    |> result.try(warden.parse_browser_binding)
-    |> option.from_result
   let options = warden.LoginOptions(..warden.default_login(), login_hint: hint)
-  case warden.begin_login(context.client, binding, options) {
-    Ok(redirect) ->
-      wisp.redirect(redirect.url)
-      |> set_binding(context, redirect.browser_binding)
+  case warden.begin_login(context.client, request, options) {
+    // Warden sets the browser-binding cookie and the redirect.
+    Ok(redirect) -> warden.login_response(wisp.response(303), redirect)
     Error(error) ->
-      page(503, "Sign-in unavailable", escape(string.inspect(error)))
+      page(
+        503,
+        "Sign-in unavailable",
+        escape(warden.describe_login_error(error)),
+      )
   }
 }
 
@@ -121,20 +112,14 @@ fn third_party_initiated(request: Request, context: Context) -> Response {
 fn callback(
   request: Request,
   context: Context,
-  input: warden.Callback,
+  callback: http_request.Request(String),
 ) -> Response {
-  let binding =
-    wisp.get_cookie(request, binding_cookie, wisp.PlainText)
-    |> result.try(warden.parse_browser_binding)
-    |> option.from_result
-  let completed = case warden.complete_login(context.client, input, binding) {
-    Ok(warden.LoginCompleted(session)) -> Ok(session)
-    Ok(warden.LoginRecoveryRequired(recovery)) ->
-      case warden.recover_custody(context.client, recovery) {
-        Ok(warden.CustodyRecovered(session)) -> Ok(session)
-        _ -> Error(TryLater("sign-in could not be confirmed"))
-      }
-    Error(error) -> Error(login_failure(error))
+  let completed = case warden.complete_login(context.client, callback) {
+    // Installation unconfirmed: resubmit once; the code is not exchanged
+    // again.
+    Error(warden.CustodyUnconfirmed(recovery)) ->
+      warden.recover_custody(context.client, recovery)
+    other -> other
   }
   case completed {
     Ok(session) ->
@@ -157,13 +142,14 @@ fn callback(
             protect.session_attributes(session_max_age),
           )
         Error(error) -> {
-          let _ = warden.logout(context.client, session, no_redirect())
+          let _ =
+            warden.logout(context.client, session, warden.default_logout())
           failure_page(BadRequest(
-            "userinfo rejected: " <> string.inspect(error),
+            "userinfo rejected: " <> warden.describe_userinfo_error(error),
           ))
         }
       }
-    Error(failure) -> failure_page(failure)
+    Error(error) -> failure_page(login_failure(error))
   }
 }
 
@@ -177,21 +163,15 @@ pub type AppFailure {
   TryLater(reason: String)
 }
 
-/// Every Warden login error mapped explicitly (no catch-all).
+/// Warden login errors mapped by their action: the union may grow, the
+/// action does not.
 pub fn login_failure(error: warden.LoginError) -> AppFailure {
-  case error {
-    warden.CallbackMalformed(problem) -> BadRequest(string.inspect(problem))
-    warden.CallbackRejected(problem) -> BadRequest(string.inspect(problem))
-    warden.LoginExpired -> RetryLogin("the sign-in took too long")
-    warden.LoginReplayed -> RetryLogin("this sign-in was already used")
-    warden.LoginChanged -> RetryLogin("the sign-in changed")
-    warden.TransactionStoreUnavailable -> TryLater("sign-in store unavailable")
-    warden.ProviderDenied(denial) -> RetryLogin(string.inspect(denial))
-    warden.ProviderUnavailableBeforeExchange(_) ->
-      RetryLogin("the identity provider was unreachable")
-    warden.ExchangeRejected(error) -> RetryLogin(string.inspect(error))
-    warden.ExchangeOutcomeUnknown -> RetryLogin("sign-in outcome unknown")
-    warden.IdentityRejected(problem) -> RetryLogin(string.inspect(problem))
+  let reason = warden.describe_login_error(error)
+  case warden.login_error_action(error) {
+    warden.Reauthenticate -> RetryLogin(reason)
+    warden.RejectRequest -> BadRequest(reason)
+    warden.RetryLater | warden.Recover | warden.FixConfiguration ->
+      TryLater(reason)
   }
 }
 
@@ -274,8 +254,8 @@ fn home(request: Request, context: Context) -> Response {
           <> escape(option.unwrap(warden.email(identity), ""))
           <> "</dd><dt>Department</dt><dd id=\"department\">"
           <> escape(option.unwrap(profile.department, ""))
-          <> "</dd><dt>Revision</dt><dd id=\"revision\">"
-          <> string.inspect(warden.session_revision(s))
+          <> "</dd><dt>Token</dt><dd id=\"token\">"
+          <> token_fingerprint(context, s)
           <> "</dd></dl>"
           <> "<form method=\"post\" action=\"/refresh\"><button id=\"refresh\">Refresh</button></form>"
           <> "<form method=\"post\" action=\"/logout\"><button id=\"logout\">Sign out</button></form>",
@@ -284,27 +264,42 @@ fn home(request: Request, context: Context) -> Response {
   }
 }
 
+/// A short digest of the session's current access token, so a page can
+/// show that a refresh replaced it without showing the token.
+fn token_fingerprint(context: Context, session: warden.Session) -> String {
+  case warden.access_token(context.client, session) {
+    Ok(access) ->
+      crypto.hash(crypto.Sha256, <<
+        warden.access_token_value(access.token):utf8,
+      >>)
+      |> bit_array.base16_encode
+      |> string.slice(0, 12)
+    Error(_) -> ""
+  }
+}
+
 fn refresh(request: Request, context: Context) -> Response {
   case session(request, context) {
     Error(Nil) -> wisp.redirect("/")
     Ok(s) -> {
-      let outcome = case warden.refresh_session(context.client, s) {
-        Ok(warden.RefreshCompleted(refreshed)) ->
-          case warden.userinfo(context.client, refreshed) {
+      let refreshed = case warden.refresh(context.client, s) {
+        Error(warden.RefreshUnconfirmed(recovery)) ->
+          warden.recover_refresh(context.client, recovery)
+        other -> other
+      }
+      let outcome = case refreshed {
+        Ok(access) ->
+          case warden.userinfo(context.client, access.session) {
             Ok(_) | Error(warden.UserinfoNotSupported) -> "completed"
             Error(_) -> "completed-userinfo-rejected"
           }
-        Ok(warden.RefreshPublicationUnresolved(recovery)) ->
-          case warden.recover_refresh_publication(context.client, recovery) {
-            Ok(warden.RefreshCompleted(_)) -> "completed"
-            _ -> "unresolved"
+        Error(error) ->
+          case warden.session_error_action(error) {
+            warden.Reauthenticate -> "reauthenticate"
+            warden.RetryLater -> "retry-later"
+            warden.Recover -> "unresolved"
+            warden.FixConfiguration | warden.RejectRequest -> "error"
           }
-        Ok(warden.RefreshDidNotSend(_)) -> "not-sent"
-        Ok(warden.RefreshRejectedByEndpoint(_)) -> "rejected"
-        Ok(warden.RefreshProviderQuarantined(_))
-        | Ok(warden.RefreshResponseQuarantined(_, _))
-        | Ok(warden.RefreshReservationUnresolved(_)) -> "quarantined"
-        Error(error) -> "error:" <> string.inspect(error)
       }
       page(
         200,
@@ -328,7 +323,11 @@ fn userinfo(request: Request, context: Context) -> Response {
             200,
           )
         Error(error) ->
-          page(502, "Userinfo failed", escape(string.inspect(error)))
+          page(
+            502,
+            "Userinfo failed",
+            escape(warden.describe_userinfo_error(error)),
+          )
       }
   }
 }
@@ -340,13 +339,15 @@ fn client_token(request: Request, context: Context) -> Response {
   case warden.client_credentials(context.client, []) {
     Ok(token) ->
       wisp.json_response(
-        "{\"expires_in\":"
-          <> option.unwrap(option.map(token.expires_in, string.inspect), "null")
-          <> "}",
+        "{\"expires\":" <> bool_json(option.is_some(token.expires_at)) <> "}",
         200,
       )
     Error(error) ->
-      page(502, "Client credentials failed", escape(string.inspect(error)))
+      page(
+        502,
+        "Client credentials failed",
+        escape(warden.describe_client_credentials_error(error)),
+      )
   }
 }
 
@@ -358,6 +359,13 @@ fn signed_in(
   case session(request, context) {
     Ok(_) -> next()
     Error(Nil) -> wisp.response(401)
+  }
+}
+
+fn bool_json(value: Bool) -> String {
+  case value {
+    True -> "true"
+    False -> "false"
   }
 }
 
@@ -375,47 +383,33 @@ fn logout(request: Request, context: Context) -> Response {
     Ok(s) -> {
       let options =
         warden.LogoutOptions(
+          ..warden.default_logout(),
           post_logout_redirect_uri: Some(context.post_logout_redirect_uri),
           state: Some(wisp.random_string(16)),
         )
+      // Warden revokes the refresh token (RFC 7009) after removing custody;
+      // a failed revocation does not keep the session.
       case warden.logout(context.client, s, options) {
-        Ok(warden.RedirectToProvider(url)) -> wisp.redirect(url) |> cleared
-        Ok(warden.NoEndSessionEndpoint) ->
-          wisp.redirect("/logged-out") |> cleared
+        Ok(warden.LoggedOut(
+          provider_logout: warden.RedirectToProvider(redirect),
+          ..,
+        )) -> warden.logout_response(wisp.response(303), redirect) |> cleared
+        Ok(warden.LoggedOut(..)) -> wisp.redirect("/logged-out") |> cleared
         // Already ended (another tab's logout, or expiry): signed out.
         Error(warden.LogoutSession(warden.SessionNotFound)) ->
           wisp.redirect("/logged-out") |> cleared
         Error(error) ->
-          page(503, "Sign-out failed", escape(string.inspect(error)))
+          page(
+            503,
+            "Sign-out failed",
+            escape(warden.describe_logout_error(error)),
+          )
       }
     }
   }
 }
 
-fn no_redirect() -> warden.LogoutOptions {
-  warden.LogoutOptions(post_logout_redirect_uri: None, state: None)
-}
-
-// --- Cookies and pages ---------------------------------------------------------
-
-fn set_binding(
-  response: Response,
-  context: Context,
-  binding: warden.BrowserBinding,
-) -> Response {
-  response.set_cookie(
-    response,
-    binding_cookie,
-    wisp_plain(warden.browser_binding_value(binding)),
-    protect.binding_attributes(context.response_mode, context.login_lifetime),
-  )
-}
-
-/// wisp's PlainText cookies are base64 encoded; match that encoding so
-/// `wisp.get_cookie(_, _, PlainText)` reads the value back.
-fn wisp_plain(value: String) -> String {
-  bit_array.base64_encode(<<value:utf8>>, False)
-}
+// --- Pages ---------------------------------------------------------------------
 
 fn page(status: Int, title: String, body: String) -> Response {
   wisp.html_response(

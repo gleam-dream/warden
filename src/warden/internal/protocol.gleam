@@ -15,6 +15,7 @@ pub type Metadata {
     token_endpoint: Option(String),
     userinfo_endpoint: Option(String),
     introspection_endpoint: Option(String),
+    revocation_endpoint: Option(String),
     end_session_endpoint: Option(String),
     /// None when the provider omits `code_challenge_methods_supported`.
     code_challenge_methods: Option(List(String)),
@@ -71,8 +72,10 @@ pub type Introspected {
     subject: Option(String),
     username: Option(String),
     scopes: List(String),
+    audiences: List(String),
     expires_at: Option(Int),
     issued_at: Option(Int),
+    not_before: Option(Int),
     token_type: Option(String),
     issuer: Option(String),
     extra: Dynamic,

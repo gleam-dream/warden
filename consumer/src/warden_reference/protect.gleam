@@ -6,36 +6,12 @@ import gleam/http/request
 import gleam/int
 import gleam/option.{None, Some}
 import gleam/string
-import warden/config
 import wisp.{type Request, type Response}
 
 /// `__Host-` cookies must be `Secure`, have `Path=/` and no `Domain`, so a
-/// sibling subdomain or a plaintext response cannot plant them.
-pub const binding_cookie = "__Host-warden_binding"
-
+/// sibling subdomain or a plaintext response cannot plant them. Warden sets
+/// its own browser-binding cookie (`warden.login_response`).
 pub const session_cookie = "__Host-warden_session"
-
-/// Attributes of the browser-binding cookie. It must survive the provider's
-/// redirect (`SameSite=Lax`) or cross-site form post (`SameSite=None`).
-/// `Secure` never depends on the request scheme: behind a TLS-terminating
-/// proxy the application itself sees plain HTTP.
-pub fn binding_attributes(
-  mode: config.ResponseMode,
-  login_lifetime: Int,
-) -> cookie.Attributes {
-  cookie.Attributes(
-    // Outlive the transaction so an expired login is reported as expired.
-    max_age: Some(login_lifetime + 300),
-    domain: None,
-    path: Some("/"),
-    secure: True,
-    http_only: True,
-    same_site: case mode {
-      config.FormPost -> Some(cookie.None)
-      config.Query -> Some(cookie.Lax)
-    },
-  )
-}
 
 /// Attributes of the session cookie.
 pub fn session_attributes(max_age: Int) -> cookie.Attributes {

@@ -1,40 +1,20 @@
-//// Operational behaviour (gate V6): provider worker loss and restart, key
-//// rotation, bounded pending logins, atom and process growth.
+//// Operational behaviour (gate V6): lifecycle and supervision, provider
+//// worker loss and restart, key rotation, bounded pending logins, atom and
+//// process growth.
 
+import gleam/erlang/process
+import gleam/http/request
+import gleam/http/response
 import gleam/list
 import gleam/option.{None, Some}
+import gleam/otp/static_supervisor as supervisor
 import gleam/string
+import gleam/time/duration
 import warden
 import warden/config
-import warden_login_test.{authorize, logged_in, param, settings, start}
+import warden/testing
+import warden_login_test.{authorize, browser, logged_in, param, settings, start}
 import warden_test_support as support
-
-pub fn provider_worker_crash_is_typed_and_recovers_test() {
-  let provider = support.provider_start(support.Standard)
-  let client = start(settings(provider))
-  let worker = warden.provider_worker(client)
-  support.worker_kill(worker)
-  // While the worker restarts and rediscovers, operations fail typed or
-  // succeed; they never crash the caller.
-  let early = warden.begin_login(client, None, warden.default_login())
-  case early {
-    Ok(_) | Error(warden.LoginProviderUnavailable(_)) -> Nil
-    Error(other) -> panic as string.inspect(other)
-  }
-  wait_until(fn() { support.worker_alive(worker) }, 100)
-  wait_until(
-    fn() {
-      case warden.begin_login(client, None, warden.default_login()) {
-        Ok(_) -> True
-        Error(_) -> False
-      }
-    },
-    100,
-  )
-  let _ = logged_in(provider, client)
-  warden.stop(client)
-  support.provider_stop(provider)
-}
 
 fn wait_until(check: fn() -> Bool, tries: Int) -> Nil {
   case check() {
@@ -47,13 +27,126 @@ fn wait_until(check: fn() -> Bool, tries: Int) -> Nil {
   }
 }
 
+fn can_begin(client: warden.Client) -> Bool {
+  case warden.begin_login(client, browser(), warden.default_login()) {
+    Ok(_) -> True
+    Error(_) -> False
+  }
+}
+
+pub fn provider_worker_crash_is_typed_and_recovers_test() {
+  let provider = support.provider_start(support.Standard)
+  let client = start(settings(provider))
+  let worker = client.names.provider
+  support.worker_kill(worker)
+  // While the worker restarts and rediscovers, operations fail typed or
+  // succeed; they never crash the caller.
+  case warden.begin_login(client, browser(), warden.default_login()) {
+    Ok(_) | Error(warden.LoginProviderUnavailable(_)) -> Nil
+    Error(other) -> panic as string.inspect(other)
+  }
+  wait_until(fn() { support.worker_alive(worker) }, 100)
+  wait_until(fn() { can_begin(client) }, 100)
+  let _ = logged_in(provider, client)
+  warden.stop(client)
+  support.provider_stop(provider)
+}
+
+/// R5: under a supervisor, the child starts without waiting for the
+/// provider; operations answer `ProviderNotReady` until background
+/// discovery succeeds.
+pub fn supervised_client_discovers_in_the_background_test() {
+  // A provider that is not there yet: nothing listens on this issuer.
+  let unreachable =
+    config.new(
+      issuer: "https://localhost:1",
+      client_id: "warden-rp",
+      redirect_uri: "https://app.example/callback",
+      authentication: config.ClientSecretBasic(config.secret("sentinel-secret")),
+    )
+    |> config.with_destinations(config.AllowLoopbackForTesting)
+  let assert Ok(client) = warden.new(unreachable)
+  let assert Ok(_) =
+    supervisor.new(supervisor.OneForOne)
+    |> supervisor.add(warden.supervised(client))
+    |> supervisor.start
+  assert warden.begin_login(client, browser(), warden.default_login())
+    == Error(warden.LoginProviderUnavailable(warden.ProviderNotReady))
+  warden.stop(client)
+  // A reachable provider: ready shortly after the child started.
+  let provider = support.provider_start(support.Standard)
+  let assert Ok(client) = warden.new(settings(provider))
+  let assert Ok(_) =
+    supervisor.new(supervisor.OneForOne)
+    |> supervisor.add(warden.supervised(client))
+    |> supervisor.start
+  wait_until(fn() { can_begin(client) }, 100)
+  let _ = logged_in(provider, client)
+  warden.stop(client)
+  support.provider_stop(provider)
+}
+
+/// R5: the client value names its processes, so it stays valid when its
+/// supervisor restarts the whole Warden tree.
+pub fn the_client_survives_a_restart_of_its_tree_test() {
+  let provider = support.provider_start(support.Standard)
+  let assert Ok(client) = warden.new(settings(provider))
+  let assert Ok(_) =
+    supervisor.new(supervisor.OneForOne)
+    |> supervisor.add(warden.supervised(client))
+    |> supervisor.start
+  wait_until(fn() { can_begin(client) }, 100)
+  let assert Ok(first) = process.named(client.names.supervisor)
+  process.kill(first)
+  wait_until(
+    fn() {
+      case process.named(client.names.supervisor) {
+        Ok(pid) -> pid != first
+        Error(Nil) -> False
+      }
+    },
+    100,
+  )
+  wait_until(fn() { can_begin(client) }, 100)
+  let _ = logged_in(provider, client)
+  warden.stop(client)
+  support.provider_stop(provider)
+}
+
+pub fn a_started_client_cannot_start_twice_test() {
+  let provider = support.provider_start(support.Standard)
+  let client = start(settings(provider))
+  assert warden.start(client) == Error(warden.AlreadyStarted)
+  warden.stop(client)
+  // Stopped, it can start again with the same value.
+  let assert Ok(Nil) = warden.start(client)
+  let _ = logged_in(provider, client)
+  warden.stop(client)
+  support.provider_stop(provider)
+}
+
+/// A service client needs no redirect URI and no authorization-code
+/// support; login is not configured.
+pub fn service_client_starts_without_login_test() {
+  let assert Ok(provider) = testing.start_provider(testing.provider_options())
+  let assert Ok(client) = warden.new(testing.service_config(provider))
+  let assert Ok(Nil) = warden.start(client)
+  assert warden.begin_login(client, browser(), warden.default_login())
+    == Error(warden.LoginNotConfigured)
+  assert warden.complete_login(client, browser())
+    == Error(warden.LoginNotConfigured)
+  let assert Ok(_) = warden.client_credentials(client, [])
+  warden.stop(client)
+  testing.stop_provider(provider)
+}
+
 pub fn signing_key_rotation_refreshes_keys_test() {
   let provider = support.provider_start(support.Standard)
   let client = start(settings(provider))
   let _ = logged_in(provider, client)
   support.rotate_key(provider)
-  // The next ID token carries an unknown kid; oidcc refreshes the JWKS
-  // through Warden's transport and the login succeeds.
+  // The next ID token carries an unknown kid; Warden refreshes the JWKS
+  // and the login succeeds.
   let _ = logged_in(provider, client)
   warden.stop(client)
   support.provider_stop(provider)
@@ -61,12 +154,11 @@ pub fn signing_key_rotation_refreshes_keys_test() {
 
 pub fn pending_logins_are_bounded_test() {
   let provider = support.provider_start(support.Standard)
-  let client =
-    start(config.Settings(..settings(provider), max_pending_logins: 5))
+  let client = start(settings(provider) |> config.with_max_pending_logins(5))
   let results =
     list.repeat(Nil, 8)
     |> list.map(fn(_) {
-      warden.begin_login(client, None, warden.default_login())
+      warden.begin_login(client, browser(), warden.default_login())
     })
   assert list.count(results, fn(r) { r == Error(warden.TooManyPendingLogins) })
     == 3
@@ -78,7 +170,8 @@ pub fn hostile_callbacks_create_no_atoms_test() {
   let provider = support.provider_start(support.Standard)
   let client = start(settings(provider))
   let assert Ok(redirect) =
-    warden.begin_login(client, None, warden.default_login())
+    warden.begin_login(client, browser(), warden.default_login())
+  let state = param(warden.login_url(redirect), "state")
   let before = support.atom_count()
   list.repeat(Nil, 500)
   |> list.index_map(fn(_, i) {
@@ -86,25 +179,27 @@ pub fn hostile_callbacks_create_no_atoms_test() {
     let _ =
       warden.complete_login(
         client,
-        warden.QueryCallback(
-          "code=c"
-          <> n
-          <> "&state=s"
-          <> n
-          <> "&error_x"
-          <> n
-          <> "=1&iss=https://x"
-          <> n,
+        request.Request(
+          ..testing.browser_request(redirect),
+          query: Some(
+            "code=c"
+            <> n
+            <> "&state=s"
+            <> n
+            <> "&error_x"
+            <> n
+            <> "=1&iss=https://x"
+            <> n,
+          ),
         ),
-        Some(redirect.browser_binding),
       )
     let _ =
       warden.complete_login(
         client,
-        warden.QueryCallback(
-          "error=weird_" <> n <> "&state=" <> param(redirect.url, "state"),
+        request.Request(
+          ..testing.browser_request(redirect),
+          query: Some("error=weird_" <> n <> "&state=" <> state),
         ),
-        Some(redirect.browser_binding),
       )
     Nil
   })
@@ -121,8 +216,7 @@ pub fn repeated_logins_do_not_leak_processes_test() {
   list.repeat(Nil, 100)
   |> list.each(fn(_) {
     let session = logged_in(provider, client)
-    let assert Ok(warden.RefreshCompleted(_)) =
-      warden.refresh_session(client, session)
+    let assert Ok(_) = warden.refresh(client, session)
     Nil
   })
   support.sleep(200)
@@ -130,4 +224,59 @@ pub fn repeated_logins_do_not_leak_processes_test() {
   let _ = authorize
   warden.stop(client)
   support.provider_stop(provider)
+}
+
+/// R4: the login response is a 303 with the binding cookie Warden owns:
+/// `__Host-`, `Secure`, `HttpOnly`, `Path=/`, `SameSite` by response mode,
+/// and no caching.
+pub fn login_response_sets_the_binding_cookie_safely_test() {
+  let assert Ok(provider) = testing.start_provider(testing.provider_options())
+  let cookie_of = fn(mode) {
+    let assert Ok(client) =
+      warden.new(
+        testing.config(provider, "https://app.test/callback")
+        |> config.with_response_mode(mode),
+      )
+    let assert Ok(Nil) = warden.start(client)
+    let assert Ok(redirect) =
+      warden.begin_login(client, browser(), warden.default_login())
+    let reply = warden.login_response(response.new(200), redirect)
+    warden.stop(client)
+    assert reply.status == 303
+    assert response.get_header(reply, "location")
+      == Ok(warden.login_url(redirect))
+    assert response.get_header(reply, "cache-control") == Ok("no-store")
+    let assert Ok(cookie) = response.get_header(reply, "set-cookie")
+    cookie
+  }
+  let query = cookie_of(config.Query)
+  assert string.starts_with(query, "__Host-warden_binding=")
+  list.each(
+    ["Secure", "HttpOnly", "Path=/", "SameSite=Lax", "Max-Age=900"],
+    fn(attribute) {
+      assert #(attribute, string.contains(query, attribute))
+        == #(attribute, True)
+    },
+  )
+  assert !string.contains(query, "Domain")
+  let form = cookie_of(config.FormPost)
+  assert string.contains(form, "SameSite=None")
+  assert string.contains(form, "Secure")
+  testing.stop_provider(provider)
+}
+
+/// R11: the provider-cache call waits as long as a key fetch can take.
+pub fn provider_calls_wait_for_one_request_timeout_test() {
+  let assert Ok(client) =
+    warden.new(
+      config.new(
+        issuer: "https://idp.example",
+        client_id: "app",
+        redirect_uri: "https://app.example/cb",
+        authentication: config.PublicClient,
+      )
+      |> config.with_request_timeout(duration.seconds(12)),
+    )
+  assert client.backend.provider.timeout == 13_000
+  let _ = None
 }

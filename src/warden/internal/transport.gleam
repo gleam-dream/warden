@@ -13,8 +13,8 @@
 ////   reading; any non-identity `content-encoding` is refused;
 //// - failures are mapped to closed classes; `NotSent` only when HTTP Gun
 ////   reports `NotSent`;
-//// - observations (`observation.http_request`) carry only method, host,
-////   path, status or failure class and duration.
+//// - observations (`telemetry.http_request`) carry only method, host,
+////   path, status or failure reason, duration and the caller's correlation.
 ////
 //// Requests run on the Warden client's supervised, shared HTTP Gun client
 //// when the policy carries a pool; otherwise (startup discovery, tests) on a
@@ -32,6 +32,7 @@ import gleam/option.{type Option, None, Some}
 import gleam/otp/supervision
 import gleam/result
 import gleam/string
+import gleam/time/duration
 import gleam/uri
 import http_gun
 import http_gun/body
@@ -40,7 +41,8 @@ import http_gun/deadline
 import http_gun/destination
 import http_gun/error
 import sinal
-import warden/observation
+import sinal/correlation.{type Correlation}
+import warden/telemetry
 
 pub type Trust {
   SystemTrust
@@ -61,6 +63,8 @@ pub type Policy {
     resolver: Option(fn(String, Int) -> Result(List(Address), Nil)),
     /// The shared client to use; `None` uses a one-shot client.
     pool: Option(Pool),
+    /// Carried into HTTP Gun's and Warden's request events.
+    correlation: Option(Correlation),
   )
 }
 
@@ -76,6 +80,7 @@ pub fn policy(trust: Trust) -> Policy {
     max_headers: 100,
     resolver: None,
     pool: None,
+    correlation: None,
   )
 }
 
@@ -158,7 +163,7 @@ pub fn pool_child(
   policy: Policy,
   pool: Pool,
 ) -> supervision.ChildSpecification(Nil) {
-  http_gun.supervised(settings(policy), pool.name)
+  http_gun.supervised(gun_config(policy), pool.name)
   |> supervision.map_data(fn(_) { Nil })
 }
 
@@ -172,7 +177,7 @@ pub fn send(policy: Policy, request: Request) -> Result(Response, Failure) {
     // An unexpected exception cannot prove that nothing was sent.
     Error(_) -> Error(Failure(Sent, InternalError))
   }
-  observe(request, result, start)
+  observe(policy, request, result, start)
   result
 }
 
@@ -204,7 +209,7 @@ fn run(policy: Policy, request: Request) -> Result(Response, Failure) {
     Some(pool) -> exchange(http_gun.named(pool.name), policy, req)
     None -> {
       use client <- result.try(
-        http_gun.start(settings(policy))
+        http_gun.start(gun_config(policy))
         |> result.replace_error(Failure(NotSent, InternalError)),
       )
       exception.defer(fn() { http_gun.stop(client) }, fn() {
@@ -219,7 +224,11 @@ fn exchange(
   policy: Policy,
   req: http_request.Request(BitArray),
 ) -> Result(Response, Failure) {
-  let budget = deadline.after(int.max(0, policy.timeout_ms))
+  let budget = deadline.after(duration.milliseconds(policy.timeout_ms))
+  let client = case policy.correlation {
+    Some(correlation) -> http_gun.with_correlation(client, correlation)
+    None -> client
+  }
   http_gun.with_response(
     client |> http_gun.with_deadline(budget),
     req,
@@ -237,7 +246,8 @@ fn exchange(
   )
 }
 
-fn settings(policy: Policy) -> config.Config {
+/// The HTTP Gun configuration for a policy.
+pub fn gun_config(policy: Policy) -> config.Config {
   let timeout = int.max(1, policy.timeout_ms)
   let allowed = destination.default()
   let allowed = case policy.allow_loopback {
@@ -260,12 +270,11 @@ fn settings(policy: Policy) -> config.Config {
       SystemTrust -> config.SystemTrust
       Anchors(ders) -> config.Anchors(ders)
     })
-    // One bound for every phase, as before: the request deadline, the
-    // connect (with DNS), the pool wait and the idle read all use it.
-    |> config.with_request_timeout(config.Milliseconds(timeout))
-    |> config.with_connect_timeout(timeout)
-    |> config.with_pool_timeout(timeout)
-    |> config.with_idle_timeout(config.Milliseconds(timeout))
+    // The request deadline bounds the whole exchange; connection setup,
+    // pool checkout, idle reads and idle pooled connections keep HTTP Gun's
+    // own tighter bounds (5 s, 5 s, 30 s, 60 s), so a saturated pool or a
+    // dead connection fails before the request deadline.
+    |> config.with_request_timeout(config.After(duration.milliseconds(timeout)))
     |> config.with_max_request_body_bytes(max_request_body)
     |> config.with_max_header_bytes(policy.max_header_bytes)
     |> config.with_max_header_count(policy.max_headers)
@@ -274,7 +283,8 @@ fn settings(policy: Policy) -> config.Config {
   case policy.resolver {
     Some(resolve) ->
       config.with_resolver(configured, fn(host, remaining) {
-        resolve(host, remaining) |> result.map(list.map(_, to_gun_address))
+        resolve(host, duration.to_milliseconds(remaining))
+        |> result.map(list.map(_, to_gun_address))
       })
     None -> configured
   }
@@ -480,6 +490,7 @@ fn to_gun_address(address: Address) -> destination.Address {
 // Observations
 
 fn observe(
+  policy: Policy,
   request: Request,
   result: Result(Response, Failure),
   start: Int,
@@ -489,19 +500,52 @@ fn observe(
     _ -> #("", "")
   }
   let outcome = case result {
-    Ok(response) -> observation.Status(response.status)
+    Ok(response) -> telemetry.Status(response.status)
     Error(Failure(stage:, class:)) ->
-      observation.Failed(sent: stage == Sent, class: class_name(class))
+      telemetry.Failed(
+        evidence: case stage {
+          Sent -> telemetry.MaybeSent
+          NotSent -> telemetry.NotSent
+        },
+        reason: telemetry_reason(class),
+      )
   }
   let method = case request.method {
-    Get -> observation.Get
-    Post -> observation.Post
+    Get -> telemetry.Get
+    Post -> telemetry.Post
   }
   sinal.emit(
-    observation.http_request(),
-    observation.HttpMeasurements(duration_ms: monotonic_ms() - start),
-    observation.HttpRequest(method:, host:, path:, outcome:),
+    telemetry.http_request(),
+    telemetry.HttpMeasurements(duration_ms: monotonic_ms() - start),
+    telemetry.HttpRequest(
+      method:,
+      host:,
+      path:,
+      outcome:,
+      correlation: policy.correlation,
+    ),
   )
+}
+
+/// The telemetry reason of a failure class.
+pub fn telemetry_reason(class: Class) -> telemetry.TransportReason {
+  case class {
+    InvalidDestination -> telemetry.InvalidDestination
+    InsecureScheme -> telemetry.InsecureScheme
+    DestinationRejected -> telemetry.DestinationRejected
+    ResolutionFailed -> telemetry.ResolutionFailed
+    ConnectionRefused -> telemetry.ConnectionRefused
+    ConnectionFailed -> telemetry.ConnectionFailed
+    TlsRejected -> telemetry.TlsRejected
+    Timeout -> telemetry.Timeout
+    ReceiveFailed -> telemetry.ReceiveFailed
+    MalformedResponse -> telemetry.MalformedHttp
+    HeadersTooLarge -> telemetry.ResponseHeadersTooLarge
+    BodyTooLarge -> telemetry.ResponseTooLarge
+    UnsupportedContentEncoding -> telemetry.UnsupportedContentEncoding
+    InvalidRequest | NoTrustAnchors | InternalError ->
+      telemetry.OtherTransportFailure
+  }
 }
 
 /// Closed snake_case name of a failure class (observations, failure mapping).

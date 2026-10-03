@@ -1,12 +1,10 @@
-//// Pure Warden configuration.
-////
-//// Build a `Settings` value with `new` and the `with_*` functions, then call
-//// `validate` to obtain a `Config`. Nothing here opens a connection, starts a
-//// process or reads the clock; `warden.start` performs discovery with a
-//// validated `Config`.
+//// Warden configuration: an opaque `Config` built from one constructor and
+//// `with_*` setters. Nothing here opens a connection or starts a process;
+//// `warden.new` validates the configuration and `warden.start` discovers the
+//// provider.
 ////
 //// ```gleam
-//// let settings =
+//// let config =
 ////   config.new(
 ////     issuer: "https://login.example.com",
 ////     client_id: "app",
@@ -14,8 +12,44 @@
 ////     authentication: config.ClientSecretBasic(config.secret(client_secret)),
 ////   )
 ////   |> config.with_scopes(["profile", "email"])
-//// let assert Ok(validated) = config.validate(settings)
+//// let assert Ok(client) = warden.new(config)
 //// ```
+////
+//// Three constructors cover the three roles:
+////
+//// - `new`: a relying party that signs users in (and may do everything
+////   else);
+//// - `service_client`: a confidential client with no login: client
+////   credentials, introspection and access-token validation;
+//// - `resource_server`: access-token validation only (`warden/resource`),
+////   with no client identity.
+////
+//// ## Defaults
+////
+//// | Setting | Default | Setter |
+//// | --- | --- | --- |
+//// | scopes | `openid` | `with_scopes` |
+//// | ID-token algorithms | RS256, PS256, ES256, EdDSA (`none` and HMAC unrepresentable) | `with_signing_algorithms` |
+//// | response mode | query | `with_response_mode` |
+//// | RFC 9207 `iss` | required when advertised | `with_issuer_parameter` |
+//// | PKCE | advertised S256 required | `with_pkce_advertisement` |
+//// | TLS trust | system CA store | `with_trust` |
+//// | destinations | public addresses only | `with_destinations`, `with_allowed_hosts` |
+//// | provider request | 10 s | `with_request_timeout` |
+//// | provider response body | 1 MiB | `with_max_response_bytes` |
+//// | `warden.start` discovery and keys | 15 s | `with_startup_timeout` |
+//// | store call | 5 s | `with_store_timeout` |
+//// | `complete_login`, end to end | 30 s | `with_login_timeout` |
+//// | pending login | 10 min | `with_login_lifetime` |
+//// | pending logins in the built-in store | 100 000 | `with_max_pending_logins` |
+//// | session | 12 h absolute, 1 h idle | `with_session_lifetime` |
+//// | clock tolerance (`iat`, `nbf`, `auth_time`; never `exp`) | 5 s | `with_clock_tolerance` |
+//// | refresh before expiry | 30 s | `with_refresh_margin` |
+//// | wait for another request's refresh | 5 s | `with_refresh_wait` |
+//// | session and login storage | in memory | `with_custody_store`, `with_transaction_store` |
+////
+//// Secrets (`Secret`, `SigningKey`, `SealingKey`) are held in closures, so
+//// `string.inspect` of a configuration prints no credential.
 
 import exception
 import gleam/bit_array
@@ -28,20 +62,29 @@ import gleam/list
 import gleam/option.{type Option, None, Some}
 import gleam/result
 import gleam/string
+import gleam/time/duration.{type Duration}
 import gleam/uri
 import gose
 import gose/jose/jwk
 import kryptos/ec
 import kryptos/eddsa
 import warden/internal/key_policy
-import warden/internal/transport
+import warden/internal/redacted
+import warden/internal/secure
+import warden/internal/settings.{type Settings, Settings}
+import warden/store.{type Store}
+
+/// A Warden configuration. Build it with `new`, `service_client` or
+/// `resource_server` and the `with_*` setters.
+pub type Config =
+  Settings
 
 // ---------------------------------------------------------------------------
 // Secret material
 
-/// A client secret. The value is held in a closure, so `string.inspect` and
-/// ordinary logging of configuration show no secret. This does not protect
-/// against VM inspection or crash dumps; see the operational notes.
+/// A client secret, held in a closure: `string.inspect` and logs of a
+/// configuration show no secret. This does not protect against VM inspection
+/// or crash dumps; see docs/APPLICATION-RESPONSIBILITIES.md.
 pub opaque type Secret {
   Secret(reveal: fn() -> String)
 }
@@ -124,12 +167,32 @@ fn jwk_fields(text: String) -> dict.Dict(String, Dynamic) {
   |> result.unwrap(dict.new())
 }
 
-// ---------------------------------------------------------------------------
-// Settings
+/// The key that seals records in a durable store (`with_sealing_key`): 32
+/// random bytes, held in a closure. Generate one with
+/// `crypto.strong_random_bytes(32)` and keep it in a secret manager.
+pub opaque type SealingKey {
+  SealingKey(reveal: fn() -> BitArray)
+}
 
-/// How the client authenticates at the token, introspection and other
-/// endpoints. Warden uses exactly this method; it never falls back to another
-/// method advertised by the provider.
+pub type SealingKeyError {
+  /// A sealing key must be exactly 32 bytes (AES-256).
+  SealingKeyNot32Bytes
+}
+
+/// A sealing key from 32 bytes.
+pub fn sealing_key(bytes: BitArray) -> Result(SealingKey, SealingKeyError) {
+  case bit_array.byte_size(bytes) {
+    32 -> Ok(SealingKey(reveal: fn() { bytes }))
+    _ -> Error(SealingKeyNot32Bytes)
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Public option types
+
+/// How the client authenticates at the token, introspection and revocation
+/// endpoints. Warden uses exactly this method; it never falls back to
+/// another method the provider advertises. May gain variants (mTLS).
 pub type ClientAuthentication {
   /// A public client. PKCE still applies; no client secret is sent.
   PublicClient
@@ -141,9 +204,9 @@ pub type ClientAuthentication {
   PrivateKeyJwt(SigningKey)
 }
 
-/// ID-token signing algorithms Warden accepts. `none` and HMAC algorithms are
-/// not representable; the provider's advertised list is intersected with this
-/// allowlist.
+/// ID-token and access-token signing algorithms Warden accepts. `none` and
+/// HMAC algorithms are not representable; the provider's advertised list is
+/// intersected with this allowlist.
 pub type SigningAlgorithm {
   Rs256
   Rs384
@@ -157,12 +220,11 @@ pub type SigningAlgorithm {
   EdDsa
 }
 
-/// How the provider returns the authorization response.
+/// How the provider returns the authorization response. May gain JARM.
 pub type ResponseMode {
   /// Redirect with a query string (the OAuth default).
   Query
   /// Cross-site POST of an HTML form (OAuth 2.0 Form Post Response Mode).
-  /// The browser-binding cookie then needs `SameSite=None; Secure`.
   FormPost
 }
 
@@ -170,8 +232,7 @@ pub type ResponseMode {
 /// must always equal the configured issuer.
 pub type IssuerParameterPolicy {
   /// Require `iss` when the provider advertises
-  /// `authorization_response_iss_parameter_supported`; accept its absence
-  /// otherwise.
+  /// `authorization_response_iss_parameter_supported`.
   RequireIssuerWhenAdvertised
   /// Always require `iss`.
   AlwaysRequireIssuer
@@ -185,17 +246,14 @@ pub type PkceAdvertisementPolicy {
   RequireAdvertisedS256
   /// Also accept a provider whose metadata omits
   /// `code_challenge_methods_supported` entirely. A provider that lists the
-  /// field without `S256` is still refused. Warden cannot then know whether
-  /// the provider enforces the challenge; for a confidential client, login
-  /// still relies on client authentication and the mandatory nonce against
-  /// code injection (RFC 9700 §2.1.1). Refused for public clients, which have
-  /// no other protection for an intercepted code (decision D7).
+  /// field without `S256` is still refused. Refused for public clients
+  /// (decision D7).
   AssumeS256WhenUnadvertised
 }
 
 /// Trust anchors for provider TLS.
 pub type Trust {
-  /// The operating system's trust store (`public_key:cacerts_get/0`).
+  /// The operating system's trust store.
   SystemTrust
   /// Only the certificates in this PEM text.
   TrustAnchorsPem(String)
@@ -213,143 +271,305 @@ pub type DestinationPolicy {
   AllowPrivateNetwork
 }
 
-pub type Transport {
-  Transport(
-    trust: Trust,
-    destinations: DestinationPolicy,
-    /// When set, provider requests may only reach these host names.
-    allowed_hosts: Option(List(String)),
-    /// Deadline for one provider request, including resolution and connect.
-    request_timeout_ms: Int,
-    /// Maximum response body size.
-    max_response_bytes: Int,
-  )
-}
+// ---------------------------------------------------------------------------
+// Constructors
 
-pub type Settings {
-  Settings(
-    issuer: String,
-    client_id: String,
-    redirect_uri: String,
-    authentication: ClientAuthentication,
-    /// Scopes requested at login in addition to `openid`.
-    scopes: List(String),
-    signing_algorithms: List(SigningAlgorithm),
-    response_mode: ResponseMode,
-    issuer_parameter: IssuerParameterPolicy,
-    pkce_advertisement: PkceAdvertisementPolicy,
-    transport: Transport,
-    /// Pending login lifetime.
-    login_lifetime_seconds: Int,
-    /// Maximum pending logins held by the built-in transaction store.
-    max_pending_logins: Int,
-    /// How long `warden.start` waits for discovery and keys.
-    startup_timeout_ms: Int,
-    /// Timeout for calls to Warden's own stores.
-    store_timeout_ms: Int,
-    /// Session lifetime in custody (see `with_session_lifetime`).
-    session_absolute_seconds: Int,
-    session_idle_seconds: Int,
-    /// Clock tolerance for `iat`, `nbf`, `auth_time` (see
-    /// `with_clock_tolerance`).
-    clock_tolerance_seconds: Int,
-  )
-}
-
-pub fn default_transport() -> Transport {
-  Transport(
-    trust: SystemTrust,
-    destinations: PublicInternetOnly,
-    allowed_hosts: None,
-    request_timeout_ms: 10_000,
-    max_response_bytes: 1_048_576,
-  )
-}
-
-/// Settings with Warden's defaults: `openid` only, RS256/PS256/ES256/EdDSA,
-/// query response mode, ten-minute pending logins, system trust and public
-/// destinations only.
+/// A relying party that signs users in, with Warden's defaults (see the
+/// module documentation).
 pub fn new(
   issuer issuer: String,
   client_id client_id: String,
   redirect_uri redirect_uri: String,
   authentication authentication: ClientAuthentication,
+) -> Config {
+  base(settings.RelyingParty, issuer, client_id, authentication)
+  |> fn(s) { Settings(..s, redirect_uri:) }
+}
+
+/// A confidential client without login: client credentials, introspection
+/// and access-token validation. It needs no redirect URI, and `warden.start`
+/// does not require the provider to support the authorization code flow.
+/// `begin_login` and `complete_login` answer `LoginNotConfigured`. A
+/// `PublicClient` is refused by validation.
+pub fn service_client(
+  issuer issuer: String,
+  client_id client_id: String,
+  authentication authentication: ClientAuthentication,
+) -> Config {
+  base(settings.ServiceClient, issuer, client_id, authentication)
+  |> fn(s) {
+    Settings(..s, service_without_credentials: authentication == PublicClient)
+  }
+}
+
+/// A resource server that only validates access tokens locally
+/// (`warden/resource`) against the issuer's published keys. It has no
+/// client identity: login, client credentials and introspection are not
+/// available.
+pub fn resource_server(issuer issuer: String) -> Config {
+  base(settings.ResourceServer, issuer, "", PublicClient)
+}
+
+fn base(
+  mode: settings.Mode,
+  issuer: String,
+  client_id: String,
+  authentication: ClientAuthentication,
 ) -> Settings {
   Settings(
+    mode:,
     issuer:,
     client_id:,
-    redirect_uri:,
-    authentication:,
+    redirect_uri: "",
+    authentication: to_authentication(authentication),
+    service_without_credentials: False,
     scopes: [],
-    signing_algorithms: [Rs256, Ps256, Es256, EdDsa],
-    response_mode: Query,
-    issuer_parameter: RequireIssuerWhenAdvertised,
-    pkce_advertisement: RequireAdvertisedS256,
-    transport: default_transport(),
-    login_lifetime_seconds: 600,
-    max_pending_logins: 100_000,
+    signing_algorithms: ["RS256", "PS256", "ES256", "EdDSA"],
+    response_mode: settings.Query,
+    always_require_issuer: False,
+    assume_s256: False,
+    trust: settings.SystemTrust,
+    destinations: settings.PublicOnly,
+    allowed_hosts: None,
+    request_timeout_ms: 10_000,
+    max_response_bytes: 1_048_576,
     startup_timeout_ms: 15_000,
     store_timeout_ms: 5000,
+    login_timeout_ms: 30_000,
+    login_lifetime_seconds: 600,
+    max_pending_logins: 100_000,
     session_absolute_seconds: 43_200,
     session_idle_seconds: 3600,
     clock_tolerance_seconds: 5,
+    refresh_margin_seconds: 30,
+    refresh_wait_ms: 5000,
+    custody_store: None,
+    transaction_store: None,
+    sealing_key: None,
+    previous_sealing_keys: [],
+    clock: secure.now_seconds,
   )
 }
 
-pub fn with_scopes(settings: Settings, scopes: List(String)) -> Settings {
-  Settings(..settings, scopes:)
+fn to_authentication(
+  authentication: ClientAuthentication,
+) -> settings.Authentication {
+  case authentication {
+    PublicClient -> settings.NoClientAuthentication
+    ClientSecretBasic(s) ->
+      settings.SharedSecret("client_secret_basic", redacted.new(s.reveal()))
+    ClientSecretPost(s) ->
+      settings.SharedSecret("client_secret_post", redacted.new(s.reveal()))
+    ClientSecretJwt(s) ->
+      settings.SharedSecret("client_secret_jwt", redacted.new(s.reveal()))
+    PrivateKeyJwt(key) ->
+      settings.PrivateKey(
+        jwk: redacted.new(key.reveal()),
+        key_id: key.key_id,
+        algorithms: key.algorithms,
+      )
+  }
 }
 
-pub fn with_response_mode(settings: Settings, mode: ResponseMode) -> Settings {
-  Settings(..settings, response_mode: mode)
-}
+// ---------------------------------------------------------------------------
+// Setters
 
-pub fn with_signing_algorithms(
-  settings: Settings,
-  algorithms: List(SigningAlgorithm),
-) -> Settings {
-  Settings(..settings, signing_algorithms: algorithms)
-}
-
-pub fn with_transport(settings: Settings, transport: Transport) -> Settings {
-  Settings(..settings, transport:)
-}
-
-pub fn with_trust(settings: Settings, trust: Trust) -> Settings {
-  Settings(..settings, transport: Transport(..settings.transport, trust:))
-}
-
-pub fn with_destinations(
-  settings: Settings,
-  destinations: DestinationPolicy,
-) -> Settings {
+/// Scopes requested at every login, in addition to `openid`.
+pub fn with_scopes(config: Config, scopes: List(String)) -> Config {
   Settings(
-    ..settings,
-    transport: Transport(..settings.transport, destinations:),
+    ..config,
+    scopes: list.filter(scopes, fn(s) { s != "openid" }) |> list.unique,
   )
 }
 
-pub fn with_login_lifetime(settings: Settings, seconds: Int) -> Settings {
-  Settings(..settings, login_lifetime_seconds: seconds)
+pub fn with_response_mode(config: Config, mode: ResponseMode) -> Config {
+  Settings(..config, response_mode: case mode {
+    Query -> settings.Query
+    FormPost -> settings.FormPost
+  })
+}
+
+/// The ID-token and access-token algorithms Warden accepts.
+pub fn with_signing_algorithms(
+  config: Config,
+  algorithms: List(SigningAlgorithm),
+) -> Config {
+  Settings(
+    ..config,
+    signing_algorithms: list.map(algorithms, algorithm_name) |> list.unique,
+  )
+}
+
+pub fn with_trust(config: Config, trust: Trust) -> Config {
+  Settings(..config, trust: case trust {
+    SystemTrust -> settings.SystemTrust
+    TrustAnchorsPem(pem) ->
+      case pem_certificates(pem) {
+        Ok(ders) -> settings.Anchors(ders)
+        Error(Nil) -> settings.UnreadableAnchors
+      }
+  })
+}
+
+pub fn with_destinations(config: Config, policy: DestinationPolicy) -> Config {
+  Settings(..config, destinations: case policy {
+    PublicInternetOnly -> settings.PublicOnly
+    AllowLoopbackForTesting -> settings.AllowLoopback
+    AllowPrivateNetwork -> settings.AllowPrivate
+  })
+}
+
+/// Provider requests may reach only these host names (case-insensitive).
+pub fn with_allowed_hosts(config: Config, hosts: List(String)) -> Config {
+  Settings(..config, allowed_hosts: Some(list.map(hosts, string.lowercase)))
+}
+
+/// Deadline for one provider request, including connection setup. Between
+/// 1 ms and 5 minutes; default 10 s.
+pub fn with_request_timeout(config: Config, timeout: Duration) -> Config {
+  Settings(..config, request_timeout_ms: duration.to_milliseconds(timeout))
+}
+
+/// Largest provider response body. Between 1 KiB and 64 MiB; default 1 MiB.
+pub fn with_max_response_bytes(config: Config, bytes: Int) -> Config {
+  Settings(..config, max_response_bytes: bytes)
+}
+
+/// How long `warden.start` waits for discovery and the first key set.
+/// Between 1 ms and 10 minutes; default 15 s.
+pub fn with_startup_timeout(config: Config, timeout: Duration) -> Config {
+  Settings(..config, startup_timeout_ms: duration.to_milliseconds(timeout))
+}
+
+/// Bound on one store call. Between 1 ms and 10 minutes; default 5 s.
+pub fn with_store_timeout(config: Config, timeout: Duration) -> Config {
+  Settings(..config, store_timeout_ms: duration.to_milliseconds(timeout))
+}
+
+/// One bound on `complete_login`: store calls, the code exchange, key
+/// refreshes and custody installation together. Between 1 ms and 10
+/// minutes; default 30 s.
+pub fn with_login_timeout(config: Config, timeout: Duration) -> Config {
+  Settings(..config, login_timeout_ms: duration.to_milliseconds(timeout))
+}
+
+/// How long a pending login waits for its callback. Between 1 s and 1 day;
+/// default 10 minutes.
+pub fn with_login_lifetime(config: Config, lifetime: Duration) -> Config {
+  Settings(..config, login_lifetime_seconds: whole_seconds(lifetime))
+}
+
+/// Capacity of the built-in in-memory login store, counting pending logins
+/// and recently completed ones (kept to detect replays). A full store
+/// answers `TooManyPendingLogins`. Between 1 and 10 000 000; default
+/// 100 000. A durable store enforces its own capacity (`store.StoreFull`).
+pub fn with_max_pending_logins(config: Config, count: Int) -> Config {
+  Settings(..config, max_pending_logins: count)
+}
+
+/// How long a session lasts in custody: `absolute` after login at most, and
+/// `idle` without use (restore, access token, userinfo, refresh). Expired
+/// sessions are removed with their tokens. Defaults: 12 hours absolute, 1
+/// hour idle; idle must not exceed absolute, and absolute is at most a year.
+/// The number of sessions per identity is not bounded (decision D14).
+pub fn with_session_lifetime(
+  config: Config,
+  absolute absolute: Duration,
+  idle idle: Duration,
+) -> Config {
+  Settings(
+    ..config,
+    session_absolute_seconds: whole_seconds(absolute),
+    session_idle_seconds: whole_seconds(idle),
+  )
+}
+
+/// How far a provider's clock may run ahead of this node for `iat`, `nbf`
+/// and `auth_time`; `exp` never gets tolerance. Default 5 s, at most 300 s.
+pub fn with_clock_tolerance(config: Config, tolerance: Duration) -> Config {
+  Settings(..config, clock_tolerance_seconds: whole_seconds(tolerance))
+}
+
+/// `warden.access_token` refreshes a token that expires within this margin.
+/// Between 0 and 1 hour; default 30 s.
+pub fn with_refresh_margin(config: Config, margin: Duration) -> Config {
+  Settings(..config, refresh_margin_seconds: whole_seconds(margin))
+}
+
+/// How long a request waits for another request's refresh of the same
+/// session before answering `RefreshWaitTimedOut`. Between 0 and 1 minute;
+/// default 5 s.
+pub fn with_refresh_wait(config: Config, wait: Duration) -> Config {
+  Settings(..config, refresh_wait_ms: duration.to_milliseconds(wait))
 }
 
 pub fn with_pkce_advertisement(
-  settings: Settings,
+  config: Config,
   policy: PkceAdvertisementPolicy,
-) -> Settings {
-  Settings(..settings, pkce_advertisement: policy)
+) -> Config {
+  Settings(..config, assume_s256: policy == AssumeS256WhenUnadvertised)
 }
 
 pub fn with_issuer_parameter(
-  settings: Settings,
+  config: Config,
   policy: IssuerParameterPolicy,
-) -> Settings {
-  Settings(..settings, issuer_parameter: policy)
+) -> Config {
+  Settings(..config, always_require_issuer: policy == AlwaysRequireIssuer)
+}
+
+/// Keep sessions in this store instead of memory. Needs `with_sealing_key`.
+pub fn with_custody_store(config: Config, store: Store) -> Config {
+  Settings(..config, custody_store: Some(store))
+}
+
+/// Keep pending logins in this store instead of memory, so a callback may
+/// reach another node. Needs `with_sealing_key`.
+pub fn with_transaction_store(config: Config, store: Store) -> Config {
+  Settings(..config, transaction_store: Some(store))
+}
+
+/// The key that seals records in durable stores. New records are sealed with
+/// it; records sealed with a key passed to `with_previous_sealing_keys` are
+/// still read, so a key can be rotated without signing users out.
+pub fn with_sealing_key(config: Config, key: SealingKey) -> Config {
+  Settings(..config, sealing_key: Some(redacted.new(key.reveal())))
+}
+
+/// Retired sealing keys that may still have sealed stored records.
+pub fn with_previous_sealing_keys(
+  config: Config,
+  keys: List(SealingKey),
+) -> Config {
+  Settings(
+    ..config,
+    previous_sealing_keys: list.map(keys, fn(key) { redacted.new(key.reveal()) }),
+  )
+}
+
+fn whole_seconds(value: Duration) -> Int {
+  let #(seconds, _) = duration.to_seconds_and_nanoseconds(value)
+  seconds
 }
 
 // ---------------------------------------------------------------------------
 // Validation
 
+/// A bounded setting, as `InvalidLimit` names it.
+pub type Limit {
+  RequestTimeout
+  MaxResponseBytes
+  StartupTimeout
+  StoreTimeout
+  LoginTimeout
+  LoginLifetime
+  MaxPendingLogins
+  SessionLifetime
+  ClockTolerance
+  RefreshMargin
+  RefreshWait
+}
+
+/// Why a configuration is invalid. May gain variants.
 pub type ConfigError {
   /// The issuer must be an absolute `https` URI without query or fragment.
   InvalidIssuer
@@ -364,7 +584,9 @@ pub type ConfigError {
   SigningKeyUnusable
   InvalidTrustAnchors
   InvalidAllowedHost(String)
-  InvalidLimit(String)
+  /// A numeric setting is out of range; `describe_config_error` names the
+  /// range and the setter.
+  InvalidLimit(Limit)
   /// `AssumeS256WhenUnadvertised` with `PublicClient`.
   UnadvertisedPkceRequiresConfidentialClient
   /// A client secret is empty.
@@ -372,190 +594,162 @@ pub type ConfigError {
   /// A `client_secret_jwt` secret is shorter than 32 bytes, the minimum HMAC
   /// key for HS256 (RFC 7518 §3.2).
   ClientSecretTooShort
-  /// Session lifetimes must be positive, with idle not above absolute.
-  InvalidSessionLifetime
+  /// `service_client` with `PublicClient`: a service authenticates itself.
+  ServiceClientNeedsCredentials
+  /// A durable store is configured without `with_sealing_key`.
+  SealingKeyRequired
 }
 
-/// A validated configuration.
-pub opaque type Config {
-  Config(
-    issuer: String,
-    client_id: String,
-    redirect_uri: String,
-    authentication: ClientAuthentication,
-    scopes: List(String),
-    signing_algorithms: List(String),
-    response_mode: ResponseMode,
-    issuer_parameter: IssuerParameterPolicy,
-    pkce_advertisement: PkceAdvertisementPolicy,
-    trust: TrustAnchors,
-    destinations: DestinationPolicy,
-    allowed_hosts: Option(List(String)),
-    request_timeout_ms: Int,
-    max_response_bytes: Int,
-    login_lifetime_seconds: Int,
-    max_pending_logins: Int,
-    startup_timeout_ms: Int,
-    store_timeout_ms: Int,
-    session_absolute_seconds: Int,
-    session_idle_seconds: Int,
-    clock_tolerance_seconds: Int,
-  )
-}
-
-/// Trust anchors after validation: the system store or DER certificates.
-pub type TrustAnchors {
-  SystemAnchors
-  CertificateAnchors(List(BitArray))
-}
-
-/// Validate settings. Returns every problem found.
-pub fn validate(settings: Settings) -> Result(Config, List(ConfigError)) {
-  let trust = case settings.transport.trust {
-    SystemTrust -> Ok(SystemAnchors)
-    TrustAnchorsPem(pem) ->
-      pem_certificates(pem)
-      |> result.map(CertificateAnchors)
-      |> result.replace_error(InvalidTrustAnchors)
-  }
-  let scopes = normalise_scopes(settings.scopes)
-  let algorithms =
-    settings.signing_algorithms
-    |> list.map(algorithm_name)
-    |> list.unique
+/// Check a configuration without starting anything. Returns every problem
+/// found; `warden.new` runs the same check.
+pub fn validate(config: Config) -> Result(Nil, List(ConfigError)) {
+  let relying_party = config.mode == settings.RelyingParty
   let checks = [
-    check(valid_issuer(settings.issuer), InvalidIssuer),
-    check(valid_client_id(settings.client_id), InvalidClientId),
-    check(valid_redirect_uri(settings.redirect_uri), InvalidRedirectUri),
-    check(algorithms != [], NoSigningAlgorithms),
-    check(authentication_usable(settings.authentication), SigningKeyUnusable),
-    limit(
-      settings.transport.request_timeout_ms,
-      1,
-      300_000,
-      "request_timeout_ms",
-    ),
-    limit(
-      settings.transport.max_response_bytes,
-      1024,
-      67_108_864,
-      "max_response_bytes",
-    ),
-    limit(settings.login_lifetime_seconds, 1, 86_400, "login_lifetime_seconds"),
-    limit(settings.max_pending_logins, 1, 10_000_000, "max_pending_logins"),
-    limit(settings.startup_timeout_ms, 1, 600_000, "startup_timeout_ms"),
-    limit(settings.store_timeout_ms, 1, 600_000, "store_timeout_ms"),
-    limit(settings.clock_tolerance_seconds, 0, 300, "clock_tolerance_seconds"),
-    result.map(trust, fn(_) { Nil }),
+    check(valid_issuer(config.issuer), InvalidIssuer),
     check(
-      settings.pkce_advertisement == RequireAdvertisedS256
-        || settings.authentication != PublicClient,
+      config.mode == settings.ResourceServer
+        || config.client_id != ""
+        && string.length(config.client_id) <= 512,
+      InvalidClientId,
+    ),
+    check(
+      !relying_party || valid_redirect_uri(config.redirect_uri),
+      InvalidRedirectUri,
+    ),
+    check(config.signing_algorithms != [], NoSigningAlgorithms),
+    check(
+      case config.authentication {
+        settings.PrivateKey(algorithms:, ..) -> algorithms != []
+        _ -> True
+      },
+      SigningKeyUnusable,
+    ),
+    check(config.trust != settings.UnreadableAnchors, InvalidTrustAnchors),
+    limit(config.request_timeout_ms, 1, 300_000, RequestTimeout),
+    limit(config.max_response_bytes, 1024, 67_108_864, MaxResponseBytes),
+    limit(config.startup_timeout_ms, 1, 600_000, StartupTimeout),
+    limit(config.store_timeout_ms, 1, 600_000, StoreTimeout),
+    limit(config.login_timeout_ms, 1, 600_000, LoginTimeout),
+    limit(config.login_lifetime_seconds, 1, 86_400, LoginLifetime),
+    limit(config.max_pending_logins, 1, 10_000_000, MaxPendingLogins),
+    limit(config.clock_tolerance_seconds, 0, 300, ClockTolerance),
+    limit(config.refresh_margin_seconds, 0, 3600, RefreshMargin),
+    limit(config.refresh_wait_ms, 0, 60_000, RefreshWait),
+    check(
+      config.session_idle_seconds > 0
+        && config.session_idle_seconds <= config.session_absolute_seconds
+        && config.session_absolute_seconds <= 31_536_000,
+      InvalidLimit(SessionLifetime),
+    ),
+    check(
+      !config.assume_s256 || settings.confidential(config),
       UnadvertisedPkceRequiresConfidentialClient,
     ),
+    check(!config.service_without_credentials, ServiceClientNeedsCredentials),
     check(
-      settings.session_idle_seconds > 0
-        && settings.session_idle_seconds <= settings.session_absolute_seconds
-        && settings.session_absolute_seconds <= 31_536_000,
-      InvalidSessionLifetime,
+      case config.authentication {
+        settings.SharedSecret(secret:, ..) -> redacted.reveal(secret) != ""
+        _ -> True
+      },
+      EmptyClientSecret,
     ),
-    check(client_secret_present(settings.authentication), EmptyClientSecret),
-    check(jwt_secret_long_enough(settings.authentication), ClientSecretTooShort),
+    check(
+      case config.authentication {
+        settings.SharedSecret(method: "client_secret_jwt", secret:) -> {
+          let size = string.byte_size(redacted.reveal(secret))
+          size == 0 || size >= settings.hmac_key_bytes("HS256")
+        }
+        _ -> True
+      },
+      ClientSecretTooShort,
+    ),
+    check(
+      config.sealing_key != None
+        || config.custody_store == None
+        && config.transaction_store == None,
+      SealingKeyRequired,
+    ),
   ]
   let scope_errors =
-    scopes
+    config.scopes
     |> list.filter(fn(scope) { !valid_scope(scope) })
     |> list.map(InvalidScope)
-  let host_errors = case settings.transport.allowed_hosts {
+  let host_errors = case config.allowed_hosts {
     None -> []
     Some(hosts) ->
       hosts
       |> list.filter(fn(host) { !valid_host(host) })
       |> list.map(InvalidAllowedHost)
   }
-  let errors =
-    list.flatten([
-      list.filter_map(checks, fn(c) {
-        case c {
-          Ok(_) -> Error(Nil)
-          Error(e) -> Ok(e)
-        }
-      }),
-      scope_errors,
-      host_errors,
-    ])
-  case errors, trust {
-    [], Ok(anchors) ->
-      Ok(Config(
-        issuer: settings.issuer,
-        client_id: settings.client_id,
-        redirect_uri: settings.redirect_uri,
-        authentication: settings.authentication,
-        scopes: ["openid", ..scopes],
-        signing_algorithms: algorithms,
-        response_mode: settings.response_mode,
-        issuer_parameter: settings.issuer_parameter,
-        pkce_advertisement: settings.pkce_advertisement,
-        trust: anchors,
-        destinations: settings.transport.destinations,
-        allowed_hosts: option.map(settings.transport.allowed_hosts, list.map(
-          _,
-          string.lowercase,
-        )),
-        request_timeout_ms: settings.transport.request_timeout_ms,
-        max_response_bytes: settings.transport.max_response_bytes,
-        login_lifetime_seconds: settings.login_lifetime_seconds,
-        max_pending_logins: settings.max_pending_logins,
-        startup_timeout_ms: settings.startup_timeout_ms,
-        store_timeout_ms: settings.store_timeout_ms,
-        session_absolute_seconds: settings.session_absolute_seconds,
-        session_idle_seconds: settings.session_idle_seconds,
-        clock_tolerance_seconds: settings.clock_tolerance_seconds,
-      ))
-    _, _ -> Error(errors)
+  case list.flatten([option.values(checks), scope_errors, host_errors]) {
+    [] -> Ok(Nil)
+    errors -> Error(errors)
   }
 }
 
-fn check(condition: Bool, error: ConfigError) -> Result(Nil, ConfigError) {
+fn check(condition: Bool, error: ConfigError) -> Option(ConfigError) {
   case condition {
-    True -> Ok(Nil)
-    False -> Error(error)
+    True -> None
+    False -> Some(error)
   }
 }
 
-fn limit(
-  value: Int,
-  low: Int,
-  high: Int,
-  name: String,
-) -> Result(Nil, ConfigError) {
-  check(value >= low && value <= high, InvalidLimit(name))
+fn limit(value: Int, low: Int, high: Int, which: Limit) -> Option(ConfigError) {
+  check(value >= low && value <= high, InvalidLimit(which))
 }
 
-fn normalise_scopes(scopes: List(String)) -> List(String) {
-  scopes
-  |> list.filter(fn(s) { s != "openid" })
-  |> list.unique
-}
-
-/// RFC 6749 §3.3: scope-token = 1*( %x21 / %x23-5B / %x5D-7E ). Case is
-/// preserved.
-pub fn valid_scope(scope: String) -> Bool {
-  let bytes = bit_array.from_string(scope)
-  bit_array.byte_size(bytes) > 0 && scope_bytes_valid(bytes)
-}
-
-fn scope_bytes_valid(bytes: BitArray) -> Bool {
-  case bytes {
-    <<>> -> True
-    <<byte, rest:bytes>> ->
-      {
-        byte == 0x21
-        || { byte >= 0x23 && byte <= 0x5B }
-        || { byte >= 0x5D && byte <= 0x7E }
-      }
-      && scope_bytes_valid(rest)
-    _ -> False
+/// Describe a configuration error for logs, naming the setter to change.
+pub fn describe_config_error(error: ConfigError) -> String {
+  case error {
+    InvalidIssuer ->
+      "the issuer must be an absolute https URI without query or fragment"
+    InvalidClientId -> "the client id must be 1 to 512 characters"
+    InvalidRedirectUri ->
+      "the redirect URI must be absolute, without fragment, and https unless its host is loopback"
+    InvalidScope(scope) ->
+      "the scope " <> string.inspect(scope) <> " is not an RFC 6749 scope token"
+    NoSigningAlgorithms ->
+      "with_signing_algorithms needs at least one algorithm"
+    SigningKeyUnusable ->
+      "the private key supports no client-assertion algorithm"
+    InvalidTrustAnchors ->
+      "the PEM text given to with_trust holds no readable certificate, or another block"
+    InvalidAllowedHost(host) ->
+      "the allowed host " <> string.inspect(host) <> " is not a host name"
+    InvalidLimit(which) -> describe_limit(which)
+    UnadvertisedPkceRequiresConfidentialClient ->
+      "AssumeS256WhenUnadvertised needs a confidential client"
+    EmptyClientSecret -> "the client secret is empty"
+    ClientSecretTooShort ->
+      "a client_secret_jwt secret must be at least 32 bytes"
+    ServiceClientNeedsCredentials ->
+      "service_client needs client authentication, not PublicClient"
+    SealingKeyRequired -> "a durable store needs with_sealing_key"
   }
+}
+
+fn describe_limit(which: Limit) -> String {
+  case which {
+    RequestTimeout -> "with_request_timeout must be between 1 ms and 5 minutes"
+    MaxResponseBytes ->
+      "with_max_response_bytes must be between 1 KiB and 64 MiB"
+    StartupTimeout -> "with_startup_timeout must be between 1 ms and 10 minutes"
+    StoreTimeout -> "with_store_timeout must be between 1 ms and 10 minutes"
+    LoginTimeout -> "with_login_timeout must be between 1 ms and 10 minutes"
+    LoginLifetime -> "with_login_lifetime must be between 1 s and 1 day"
+    MaxPendingLogins ->
+      "with_max_pending_logins must be between 1 and 10 000 000"
+    SessionLifetime ->
+      "with_session_lifetime needs 0 < idle <= absolute <= 1 year (whole seconds)"
+    ClockTolerance -> "with_clock_tolerance must be between 0 and 300 s"
+    RefreshMargin -> "with_refresh_margin must be between 0 and 1 hour"
+    RefreshWait -> "with_refresh_wait must be between 0 and 1 minute"
+  }
+}
+
+/// RFC 6749 §3.3: scope-token = 1*( %x21 / %x23-5B / %x5D-7E ).
+fn valid_scope(scope: String) -> Bool {
+  secure.valid_scope(scope)
 }
 
 fn valid_issuer(issuer: String) -> Bool {
@@ -575,71 +769,15 @@ fn valid_issuer(issuer: String) -> Bool {
   }
 }
 
-fn valid_client_id(client_id: String) -> Bool {
-  client_id != "" && string.length(client_id) <= 512
-}
-
-/// Redirect URIs must be absolute, fragment-free and `https`, except `http`
-/// for loopback hosts (`127.0.0.1`, `[::1]`, `localhost`).
-pub fn valid_redirect_uri(redirect: String) -> Bool {
-  case uri.parse(redirect) {
-    Ok(uri.Uri(
-      scheme: Some(scheme),
-      userinfo: None,
-      host: Some(host),
-      fragment: None,
-      ..,
-    )) ->
-      host != ""
-      && !string.contains(redirect, "#")
-      && case scheme {
-        "https" -> True
-        "http" -> host == "127.0.0.1" || host == "::1" || host == "localhost"
-        _ -> False
-      }
-    _ -> False
-  }
+fn valid_redirect_uri(redirect: String) -> Bool {
+  secure.valid_redirect_uri(redirect)
 }
 
 fn valid_host(host: String) -> Bool {
   host != "" && !string.contains(host, "/") && !string.contains(host, ":")
 }
 
-fn client_secret_present(authentication: ClientAuthentication) -> Bool {
-  case authentication {
-    ClientSecretBasic(secret)
-    | ClientSecretPost(secret)
-    | ClientSecretJwt(secret) -> secret.reveal() != ""
-    _ -> True
-  }
-}
-
-/// RFC 7518 §3.2: an HMAC key at least as long as the hash output.
-fn hmac_key_bytes(algorithm: String) -> Int {
-  case algorithm {
-    "HS384" -> 48
-    "HS512" -> 64
-    _ -> 32
-  }
-}
-
-fn jwt_secret_long_enough(authentication: ClientAuthentication) -> Bool {
-  case authentication {
-    ClientSecretJwt(secret) ->
-      secret.reveal() == ""
-      || string.byte_size(secret.reveal()) >= hmac_key_bytes("HS256")
-    _ -> True
-  }
-}
-
-fn authentication_usable(authentication: ClientAuthentication) -> Bool {
-  case authentication {
-    PrivateKeyJwt(key) -> key.algorithms != []
-    _ -> True
-  }
-}
-
-pub fn algorithm_name(algorithm: SigningAlgorithm) -> String {
+fn algorithm_name(algorithm: SigningAlgorithm) -> String {
   case algorithm {
     Rs256 -> "RS256"
     Rs384 -> "RS384"
@@ -695,190 +833,3 @@ fn pem_decode(pem: BitArray) -> Dynamic
 
 @external(erlang, "public_key", "pkix_decode_cert")
 fn pkix_decode_cert(der: BitArray, form: atom.Atom) -> Dynamic
-
-// ---------------------------------------------------------------------------
-// Accessors for Warden's own modules. These expose validated configuration,
-// never secret values; secrets cross only to the trusted backend boundary.
-
-@internal
-pub fn issuer(config: Config) -> String {
-  config.issuer
-}
-
-@internal
-pub fn client_id(config: Config) -> String {
-  config.client_id
-}
-
-@internal
-pub fn redirect_uri(config: Config) -> String {
-  config.redirect_uri
-}
-
-@internal
-pub fn scopes(config: Config) -> List(String) {
-  config.scopes
-}
-
-@internal
-pub fn signing_algorithms(config: Config) -> List(String) {
-  config.signing_algorithms
-}
-
-@internal
-pub fn response_mode(config: Config) -> ResponseMode {
-  config.response_mode
-}
-
-@internal
-pub fn issuer_parameter(config: Config) -> IssuerParameterPolicy {
-  config.issuer_parameter
-}
-
-pub fn pkce_advertisement(config: Config) -> PkceAdvertisementPolicy {
-  config.pkce_advertisement
-}
-
-@internal
-pub fn login_lifetime_seconds(config: Config) -> Int {
-  config.login_lifetime_seconds
-}
-
-@internal
-pub fn max_pending_logins(config: Config) -> Int {
-  config.max_pending_logins
-}
-
-@internal
-pub fn startup_timeout_ms(config: Config) -> Int {
-  config.startup_timeout_ms
-}
-
-@internal
-pub fn store_timeout_ms(config: Config) -> Int {
-  config.store_timeout_ms
-}
-
-@internal
-pub fn request_timeout_ms(config: Config) -> Int {
-  config.request_timeout_ms
-}
-
-@internal
-pub fn max_response_bytes(config: Config) -> Int {
-  config.max_response_bytes
-}
-
-@internal
-pub fn trust_anchors(config: Config) -> TrustAnchors {
-  config.trust
-}
-
-@internal
-pub fn destinations(config: Config) -> DestinationPolicy {
-  config.destinations
-}
-
-@internal
-pub fn allowed_hosts(config: Config) -> Option(List(String)) {
-  config.allowed_hosts
-}
-
-/// Authentication method name as used in provider metadata.
-@internal
-pub fn authentication_method(config: Config) -> String {
-  case config.authentication {
-    PublicClient -> "none"
-    ClientSecretBasic(_) -> "client_secret_basic"
-    ClientSecretPost(_) -> "client_secret_post"
-    ClientSecretJwt(_) -> "client_secret_jwt"
-    PrivateKeyJwt(_) -> "private_key_jwt"
-  }
-}
-
-/// The credential for the trusted backend boundary: the secret or private
-/// JWK text, or nothing for a public client.
-@internal
-pub fn trusted_credential(config: Config) -> Option(String) {
-  case config.authentication {
-    PublicClient -> None
-    ClientSecretBasic(s) | ClientSecretPost(s) | ClientSecretJwt(s) ->
-      Some(s.reveal())
-    PrivateKeyJwt(k) -> Some(k.reveal())
-  }
-}
-
-/// Assertion algorithms usable with the configured client authentication.
-@internal
-pub fn assertion_algorithms(config: Config) -> List(String) {
-  case config.authentication {
-    // Only the algorithms the secret is long enough for.
-    ClientSecretJwt(secret) ->
-      list.filter(["HS256", "HS384", "HS512"], fn(algorithm) {
-        string.byte_size(secret.reveal()) >= hmac_key_bytes(algorithm)
-      })
-    PrivateKeyJwt(key) -> key.algorithms
-    _ -> []
-  }
-}
-
-/// Test-only view: configured signing key id, used in assertions checks.
-@internal
-pub fn signing_key_id(config: Config) -> Option(String) {
-  case config.authentication {
-    PrivateKeyJwt(key) -> key.key_id
-    _ -> None
-  }
-}
-
-/// The transport policy derived from validated configuration.
-@internal
-pub fn transport_policy(config: Config) -> transport.Policy {
-  let #(allow_loopback, allow_private) = case config.destinations {
-    PublicInternetOnly -> #(False, False)
-    AllowLoopbackForTesting -> #(True, False)
-    AllowPrivateNetwork -> #(False, True)
-  }
-  transport.Policy(
-    ..transport.policy(case config.trust {
-      SystemAnchors -> transport.SystemTrust
-      CertificateAnchors(certs) -> transport.Anchors(certs)
-    }),
-    allow_loopback:,
-    allow_private:,
-    allowed_hosts: config.allowed_hosts,
-    timeout_ms: config.request_timeout_ms,
-    max_body: config.max_response_bytes,
-  )
-}
-
-/// How long a session lasts in custody: `absolute` seconds after login at
-/// most, and `idle` seconds without use (restore, access token, userinfo,
-/// refresh). Expired sessions are evicted with their tokens. Defaults: 12
-/// hours absolute, 1 hour idle.
-pub fn with_session_lifetime(
-  settings: Settings,
-  absolute absolute: Int,
-  idle idle: Int,
-) -> Settings {
-  Settings(
-    ..settings,
-    session_absolute_seconds: absolute,
-    session_idle_seconds: idle,
-  )
-}
-
-/// `#(absolute_seconds, idle_seconds)`.
-pub fn session_lifetime(config: Config) -> #(Int, Int) {
-  #(config.session_absolute_seconds, config.session_idle_seconds)
-}
-
-/// Seconds a provider's clock may run ahead of this node for `iat`, `nbf`
-/// and `auth_time`; `exp` never gets tolerance. Default 5, at most 300.
-pub fn with_clock_tolerance(settings: Settings, seconds: Int) -> Settings {
-  Settings(..settings, clock_tolerance_seconds: seconds)
-}
-
-pub fn clock_tolerance_seconds(config: Config) -> Int {
-  config.clock_tolerance_seconds
-}

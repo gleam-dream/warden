@@ -5,28 +5,23 @@ import gleam/http
 import gleam/http/cookie
 import gleam/list
 import gleam/option.{Some}
-import warden/config
 import warden_reference/protect
 import wisp
 import wisp/simulate
 
 const origin = "https://app.example"
 
-pub fn cookies_use_the_host_prefix_and_are_always_secure_test() {
-  // __Host- prevents sibling subdomains from planting the cookies (C6).
-  assert protect.binding_cookie == "__Host-warden_binding"
+pub fn session_cookie_uses_the_host_prefix_and_is_always_secure_test() {
+  // __Host- prevents sibling subdomains from planting the cookie (C6).
   assert protect.session_cookie == "__Host-warden_session"
   // Secure does not depend on the request scheme, which is plain HTTP
   // behind a TLS-terminating proxy (C5).
-  let query = protect.binding_attributes(config.Query, 600)
-  assert query.secure
-  assert query.http_only
-  assert query.path == Some("/")
-  assert query.domain == option.None
-  assert query.same_site == Some(cookie.Lax)
-  let form_post = protect.binding_attributes(config.FormPost, 600)
-  assert form_post.secure
-  assert form_post.same_site == Some(cookie.None)
+  let attributes = protect.session_attributes(600)
+  assert attributes.secure
+  assert attributes.http_only
+  assert attributes.path == Some("/")
+  assert attributes.domain == option.None
+  assert attributes.same_site == Some(cookie.Lax)
 }
 
 pub fn state_changing_requests_must_be_same_origin_test() {

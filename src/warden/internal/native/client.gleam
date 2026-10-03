@@ -16,7 +16,6 @@ import gleam/result
 import gleam/string
 import gleam/time/timestamp
 import gleam/uri
-import warden/config.{type Config}
 import warden/internal/native/jose
 import warden/internal/native/provider.{type Provider}
 import warden/internal/protocol.{
@@ -24,6 +23,7 @@ import warden/internal/protocol.{
   type TokenResponse,
 }
 import warden/internal/redacted.{type Redacted}
+import warden/internal/settings.{type Settings}
 import warden/internal/transport
 
 pub type Client {
@@ -42,23 +42,41 @@ pub type Client {
 }
 
 pub fn new(
-  config: Config,
+  settings: Settings,
   provider: Provider,
   policy: transport.Policy,
-  clock: fn() -> Int,
 ) -> Client {
   Client(
     provider:,
     policy:,
-    issuer: config.issuer(config),
-    client_id: config.client_id(config),
-    method: config.authentication_method(config),
-    credential: redacted.new(config.trusted_credential(config)),
-    id_token_algorithms: config.signing_algorithms(config),
-    assertion_algorithms: config.assertion_algorithms(config),
-    clock:,
-    clock_tolerance: int.max(0, config.clock_tolerance_seconds(config)),
+    issuer: settings.issuer,
+    client_id: settings.client_id,
+    method: settings.authentication_method(settings),
+    credential: redacted.new(settings.credential(settings)),
+    id_token_algorithms: settings.signing_algorithms,
+    assertion_algorithms: settings.assertion_algorithms(settings),
+    clock: settings.clock,
+    clock_tolerance: int.max(0, settings.clock_tolerance_seconds),
   )
+}
+
+/// The same client with every provider request and provider-cache call
+/// bounded by `remaining_ms` (a caller's deadline).
+pub fn within(client: Client, remaining_ms: Int) -> Client {
+  let remaining = int.max(1, remaining_ms)
+  Client(
+    ..client,
+    policy: transport.Policy(
+      ..client.policy,
+      timeout_ms: int.min(client.policy.timeout_ms, remaining),
+    ),
+    provider: provider.within(client.provider, remaining),
+  )
+}
+
+/// The same client carrying a correlation into its requests.
+pub fn with_policy(client: Client, policy: transport.Policy) -> Client {
+  Client(..client, policy:)
 }
 
 pub fn metadata(client: Client) -> Result(Metadata, Failure) {
@@ -507,12 +525,18 @@ fn introspection_decoder(body: Dynamic) -> decode.Decoder(Introspected) {
           }),
           [decode.list(decode.string)],
         )
+      let audiences =
+        decode.one_of(decode.map(decode.string, list.wrap), [
+          decode.list(decode.string),
+        ])
       use client_id <- decode.optional_field("client_id", None, opt_string)
       use subject <- decode.optional_field("sub", None, opt_string)
       use username <- decode.optional_field("username", None, opt_string)
       use scopes <- decode.optional_field("scope", [], scope)
+      use audiences <- decode.optional_field("aud", [], audiences)
       use expires_at <- decode.optional_field("exp", None, opt_int)
       use issued_at <- decode.optional_field("iat", None, opt_int)
+      use not_before <- decode.optional_field("nbf", None, opt_int)
       use token_type <- decode.optional_field("token_type", None, opt_string)
       use issuer <- decode.optional_field("iss", None, opt_string)
       decode.success(protocol.Active(
@@ -520,13 +544,73 @@ fn introspection_decoder(body: Dynamic) -> decode.Decoder(Introspected) {
         subject:,
         username:,
         scopes:,
+        audiences:,
         expires_at:,
         issued_at:,
+        not_before:,
         token_type:,
         issuer:,
         extra: body,
       ))
     }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Revocation (RFC 7009)
+
+/// Revoke a token at the provider's revocation endpoint with the
+/// configured client authentication. RFC 7009 §2.2: the endpoint answers
+/// 200 whether or not the token was valid.
+pub fn revoke(
+  client: Client,
+  token token: String,
+  hint hint: String,
+) -> Result(Nil, Failure) {
+  use snapshot <- result.try(provider.snapshot_of(client.provider))
+  use endpoint <- result.try(option.to_result(
+    snapshot.metadata.revocation_endpoint,
+    protocol.Policy("endpoint_missing"),
+  ))
+  case
+    authenticated_post(client, snapshot.metadata, endpoint, [
+      #("token", token),
+      #("token_type_hint", hint),
+    ])
+  {
+    Ok(response) if response.status == 200 -> Ok(Nil)
+    Ok(response) ->
+      Error(protocol.Endpoint(
+        status: response.status,
+        error: provider.error_code(response.body),
+      ))
+    Error(failure) -> Error(provider.transport_failure(failure))
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Access tokens (RFC 9068)
+
+/// Verify a JWT access token against the provider's keys, refreshing them
+/// once for an unknown key.
+pub fn verify_access_token(
+  client: Client,
+  token: String,
+  expect: jose.AccessExpectations,
+) -> Result(Dynamic, Result(jose.Rejection, Failure)) {
+  use snapshot <- result.try(
+    provider.snapshot_of(client.provider) |> result.map_error(Error),
+  )
+  case jose.verify_access_token(token, snapshot.keys, expect) {
+    Ok(claims) -> Ok(claims)
+    Error(jose.Rejection(reason: "unknown_key", ..)) ->
+      case provider.refresh_keys(client.provider, jose.token_kid(token)) {
+        Ok(refreshed) ->
+          jose.verify_access_token(token, refreshed.keys, expect)
+          |> result.map_error(Ok)
+        Error(failure) -> Error(Error(failure))
+      }
+    Error(rejection) -> Error(Ok(rejection))
   }
 }
 

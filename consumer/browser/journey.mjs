@@ -110,24 +110,22 @@ await scenario("replayed callback is rejected", async (context) => {
   return { status: response.status() };
 });
 
-await scenario(
-  "refresh rotates tokens and advances the revision",
-  async (context) => {
-    const { page } = await signIn(context);
-    await page.click("#refresh");
-    const outcome = await page.textContent("#refresh-outcome");
-    expect(outcome === "completed", `refresh ${outcome}`);
-    await page.goto(`${QUERY_APP}/`);
-    const revision = await page.textContent("#revision");
-    expect(revision === "2", `revision ${revision}`);
-    await page.click("#refresh");
-    expect(
-      (await page.textContent("#refresh-outcome")) === "completed",
-      "second refresh",
-    );
-    return { revision: 3 };
-  },
-);
+await scenario("refresh rotates the access token", async (context) => {
+  const { page } = await signIn(context);
+  const before = await page.textContent("#token");
+  await page.click("#refresh");
+  const outcome = await page.textContent("#refresh-outcome");
+  expect(outcome === "completed", `refresh ${outcome}`);
+  await page.goto(`${QUERY_APP}/`);
+  const after = await page.textContent("#token");
+  expect(before !== after, `token fingerprint ${before} -> ${after}`);
+  await page.click("#refresh");
+  expect(
+    (await page.textContent("#refresh-outcome")) === "completed",
+    "second refresh",
+  );
+  return { refreshes: 2 };
+});
 
 await scenario("simultaneous tabs complete independently", async (context) => {
   const a = await context.newPage();

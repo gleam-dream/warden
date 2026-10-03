@@ -25,7 +25,8 @@ pub fn slow_key_refresh_does_not_block_cached_snapshots_test() {
   let seed =
     provider.Discovered(..discovered, jwks_uri: support.server_url(slow, "/k"))
   let name = process.new_name("provider_cache_test")
-  let assert Ok(_) = provider.start(name, issuer, policy(), Some(seed))
+  let assert Ok(_) =
+    provider.start(name, issuer, policy(), Some(seed), fn(_) { True })
   let subject = process.named_subject(name)
   process.spawn(fn() {
     provider.refresh_keys(provider.Provider(subject, 5000), Some("new-kid"))

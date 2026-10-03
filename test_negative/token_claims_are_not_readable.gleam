@@ -2,5 +2,5 @@
 import warden
 
 pub fn main() {
-  warden.BrowserBinding("attacker-chosen")
+  warden.TokenClaims(todo)
 }

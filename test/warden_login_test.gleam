@@ -1,23 +1,27 @@
 //// Login orchestration against the scripted in-process provider: atomic
-//// consumption under contention, clock sampling inside the store's critical
-//// section, store loss, exchange outcomes, identity rejection and custody
-//// recovery. Every provider request crosses Warden's real TLS transport.
+//// consumption under contention, the clock sampled at consumption, store
+//// loss, exchange outcomes, identity rejection, custody recovery and the
+//// login bound. Every provider request crosses Warden's real TLS transport.
 
 import gleam/dict
 import gleam/dynamic/decode
 import gleam/erlang/process
+import gleam/http
+import gleam/http/request.{type Request}
 import gleam/list
 import gleam/option.{None, Some}
 import gleam/string
+import gleam/time/duration
 import gleam/uri
 import warden
 import warden/config
-import warden/internal/custody_store
-import warden/internal/transaction_store
-import warden/internal/transport
+import warden/internal/secure
+import warden/internal/settings
+import warden/testing
+import warden_store_support as faults
 import warden_test_support as support
 
-pub fn settings(provider: support.Provider) -> config.Settings {
+pub fn settings(provider: support.Provider) -> config.Config {
   config.new(
     issuer: support.provider_issuer(provider),
     client_id: "warden-rp",
@@ -30,10 +34,18 @@ pub fn settings(provider: support.Provider) -> config.Settings {
   |> config.with_signing_algorithms([config.Rs256])
 }
 
-pub fn start(settings: config.Settings) -> warden.Client {
-  let assert Ok(validated) = config.validate(settings)
-  let assert Ok(client) = warden.start(validated)
+pub fn start(config: config.Config) -> warden.Client {
+  let assert Ok(client) = warden.new(config)
+  let assert Ok(Nil) = warden.start(client)
   client
+}
+
+/// The configuration reading Unix time from a test clock.
+pub fn with_clock(
+  config: config.Config,
+  clock: support.Clock,
+) -> config.Config {
+  settings.Settings(..config, clock: fn() { support.clock_read(clock) })
 }
 
 pub fn param(url: String, name: String) -> String {
@@ -43,19 +55,36 @@ pub fn param(url: String, name: String) -> String {
   value
 }
 
+/// A request from a browser without a binding cookie.
+pub fn browser() -> Request(String) {
+  request.new()
+}
+
 /// Act as the browser and provider front channel: register a code for the
-/// transaction's nonce and build the callback query.
+/// login's nonce and build the callback request with the binding cookie.
 pub fn authorize(
   provider: support.Provider,
   redirect: warden.LoginRedirect,
   code: String,
-) -> String {
-  support.issue_code(provider, code, param(redirect.url, "nonce"))
-  uri.query_to_string([
+) -> Request(String) {
+  let url = warden.login_url(redirect)
+  support.issue_code(provider, code, param(url, "nonce"))
+  callback(redirect, [
     #("code", code),
-    #("state", param(redirect.url, "state")),
+    #("state", param(url, "state")),
     #("iss", support.provider_issuer(provider)),
   ])
+}
+
+/// A GET callback with these parameters and the redirect's binding cookie.
+pub fn callback(
+  redirect: warden.LoginRedirect,
+  params: List(#(String, String)),
+) -> Request(String) {
+  request.Request(
+    ..testing.browser_request(redirect),
+    query: Some(uri.query_to_string(params)),
+  )
 }
 
 pub fn logged_in(
@@ -63,15 +92,10 @@ pub fn logged_in(
   client: warden.Client,
 ) -> warden.Session {
   let assert Ok(redirect) =
-    warden.begin_login(client, None, warden.default_login())
-  let query =
-    authorize(provider, redirect, "code-" <> param(redirect.url, "state"))
-  let assert Ok(warden.LoginCompleted(session)) =
-    warden.complete_login(
-      client,
-      warden.QueryCallback(query),
-      Some(redirect.browser_binding),
-    )
+    warden.begin_login(client, browser(), warden.default_login())
+  let code = "code-" <> param(warden.login_url(redirect), "state")
+  let assert Ok(session) =
+    warden.complete_login(client, authorize(provider, redirect, code))
   session
 }
 
@@ -91,6 +115,7 @@ pub fn login_issues_identity_with_custom_claims_test() {
     decode.success(Department(name))
   }
   assert warden.decode_claims(identity, decoder) == Ok(Department("platform"))
+  assert option.is_some(warden.authentication_time(identity))
   assert support.token_requests(provider) == 1
   warden.stop(client)
   support.provider_stop(provider)
@@ -99,19 +124,48 @@ pub fn login_issues_identity_with_custom_claims_test() {
 pub fn authorization_url_carries_s256_and_fresh_material_test() {
   let provider = support.provider_start(support.Standard)
   let client = start(settings(provider))
-  let assert Ok(a) = warden.begin_login(client, None, warden.default_login())
-  let assert Ok(b) = warden.begin_login(client, None, warden.default_login())
-  assert param(a.url, "code_challenge_method") == "S256"
-  assert string.length(param(a.url, "code_challenge")) == 43
-  assert string.length(param(a.url, "state")) == 43
-  assert string.length(param(a.url, "nonce")) == 43
-  assert param(a.url, "state") != param(b.url, "state")
-  assert param(a.url, "nonce") != param(b.url, "nonce")
-  assert param(a.url, "code_challenge") != param(b.url, "code_challenge")
-  assert param(a.url, "scope") == "openid email"
-  assert a.browser_binding != b.browser_binding
+  let assert Ok(a) =
+    warden.begin_login(client, browser(), warden.default_login())
+  let assert Ok(b) =
+    warden.begin_login(client, browser(), warden.default_login())
+  let a_url = warden.login_url(a)
+  let b_url = warden.login_url(b)
+  assert param(a_url, "code_challenge_method") == "S256"
+  assert string.length(param(a_url, "code_challenge")) == 43
+  assert string.length(param(a_url, "state")) == 43
+  assert string.length(param(a_url, "nonce")) == 43
+  assert param(a_url, "state") != param(b_url, "state")
+  assert param(a_url, "nonce") != param(b_url, "nonce")
+  assert param(a_url, "code_challenge") != param(b_url, "code_challenge")
+  assert param(a_url, "scope") == "openid email"
+  // Two browsers, two bindings.
+  assert testing.browser_request(a).headers
+    != testing.browser_request(b).headers
   // The verifier never appears in the URL.
-  assert !string.contains(a.url, "code_verifier")
+  assert !string.contains(a_url, "code_verifier")
+  warden.stop(client)
+  support.provider_stop(provider)
+}
+
+/// One browser keeps one binding across tabs: a second login from a browser
+/// that holds the cookie reuses it, and both callbacks complete.
+pub fn one_binding_covers_concurrent_tabs_test() {
+  let provider = support.provider_start(support.Standard)
+  let client = start(settings(provider))
+  let assert Ok(first) =
+    warden.begin_login(client, browser(), warden.default_login())
+  let assert Ok(second) =
+    warden.begin_login(
+      client,
+      testing.browser_request(first),
+      warden.default_login(),
+    )
+  assert testing.browser_request(first).headers
+    == testing.browser_request(second).headers
+  let assert Ok(_) =
+    warden.complete_login(client, authorize(provider, second, "tab-2"))
+  let assert Ok(_) =
+    warden.complete_login(client, authorize(provider, first, "tab-1"))
   warden.stop(client)
   support.provider_stop(provider)
 }
@@ -120,23 +174,11 @@ pub fn racing_callbacks_consume_once_test() {
   let provider = support.provider_start(support.Standard)
   let client = start(settings(provider))
   let assert Ok(redirect) =
-    warden.begin_login(client, None, warden.default_login())
-  let query = authorize(provider, redirect, "race-code")
-  let attempt = fn() {
-    warden.complete_login(
-      client,
-      warden.QueryCallback(query),
-      Some(redirect.browser_binding),
-    )
-  }
+    warden.begin_login(client, browser(), warden.default_login())
+  let request = authorize(provider, redirect, "race-code")
+  let attempt = fn() { warden.complete_login(client, request) }
   let results = support.spawn_collect(list.repeat(attempt, 16), 30_000)
-  let completed =
-    list.count(results, fn(r) {
-      case r {
-        Ok(warden.LoginCompleted(_)) -> True
-        _ -> False
-      }
-    })
+  let completed = list.count(results, fn(r) { result_is_ok(r) })
   assert completed == 1
   assert list.count(results, fn(r) { r == Error(warden.LoginReplayed) }) == 15
   assert support.token_requests(provider) == 1
@@ -144,39 +186,37 @@ pub fn racing_callbacks_consume_once_test() {
   support.provider_stop(provider)
 }
 
-/// The consume request is queued while the store is held; the clock moves to
-/// exactly `expires_at` before release. The store samples the clock inside
-/// its critical section, so the login expires and no token request is sent.
-pub fn clock_is_sampled_inside_the_critical_section_test() {
+fn result_is_ok(r: Result(a, b)) -> Bool {
+  case r {
+    Ok(_) -> True
+    Error(_) -> False
+  }
+}
+
+/// The clock moves to exactly `expires_at` between the lookup and the
+/// consumption; consumption samples the clock itself, so the login expires
+/// and no token request is sent.
+pub fn clock_is_sampled_at_consumption_test() {
   let provider = support.provider_start(support.Standard)
   let base = support.now_seconds()
   let clock = support.clock_new(base)
-  let assert Ok(validated) =
-    config.validate(settings(provider) |> config.with_login_lifetime(60))
-  let assert Ok(client) =
-    warden.start_with_clock(validated, fn() { support.clock_read(clock) })
-  let assert Ok(redirect) =
-    warden.begin_login(client, None, warden.default_login())
-  let query = authorize(provider, redirect, "held-code")
-  support.clock_set(clock, base + 59)
-  let assert Ok(release) =
-    transaction_store.hold(warden.transaction_store(client))
-  let result_subject = process.new_subject()
-  process.spawn(fn() {
-    process.send(
-      result_subject,
-      warden.complete_login(
-        client,
-        warden.QueryCallback(query),
-        Some(redirect.browser_binding),
-      ),
+  let #(logins, control) = faults.memory()
+  let client =
+    start(
+      settings(provider)
+      |> config.with_login_lifetime(duration.seconds(60))
+      |> config.with_transaction_store(logins)
+      |> config.with_sealing_key(faults.sealing_key())
+      |> with_clock(clock),
     )
+  let assert Ok(redirect) =
+    warden.begin_login(client, browser(), warden.default_login())
+  let request = authorize(provider, redirect, "held-code")
+  support.clock_set(clock, base + 59)
+  faults.set(control, fn(f) {
+    faults.Faults(..f, after_get: fn() { support.clock_set(clock, base + 60) })
   })
-  process.sleep(100)
-  support.clock_set(clock, base + 60)
-  process.send(release, Nil)
-  let assert Ok(result) = process.receive(result_subject, 5000)
-  assert result == Error(warden.LoginExpired)
+  assert warden.complete_login(client, request) == Error(warden.LoginExpired)
   assert support.token_requests(provider) == 0
   warden.stop(client)
   support.provider_stop(provider)
@@ -186,20 +226,17 @@ pub fn one_second_before_expiry_completes_test() {
   let provider = support.provider_start(support.Standard)
   let base = support.now_seconds()
   let clock = support.clock_new(base)
-  let assert Ok(validated) =
-    config.validate(settings(provider) |> config.with_login_lifetime(60))
-  let assert Ok(client) =
-    warden.start_with_clock(validated, fn() { support.clock_read(clock) })
-  let assert Ok(redirect) =
-    warden.begin_login(client, None, warden.default_login())
-  let query = authorize(provider, redirect, "edge-code")
-  support.clock_set(clock, base + 59)
-  let assert Ok(warden.LoginCompleted(_)) =
-    warden.complete_login(
-      client,
-      warden.QueryCallback(query),
-      Some(redirect.browser_binding),
+  let client =
+    start(
+      settings(provider)
+      |> config.with_login_lifetime(duration.seconds(60))
+      |> with_clock(clock),
     )
+  let assert Ok(redirect) =
+    warden.begin_login(client, browser(), warden.default_login())
+  let request = authorize(provider, redirect, "edge-code")
+  support.clock_set(clock, base + 59)
+  let assert Ok(_) = warden.complete_login(client, request)
   warden.stop(client)
   support.provider_stop(provider)
 }
@@ -208,22 +245,15 @@ pub fn store_loss_never_authorises_exchange_test() {
   let provider = support.provider_start(support.Standard)
   let client = start(settings(provider))
   let assert Ok(redirect) =
-    warden.begin_login(client, None, warden.default_login())
-  let query = authorize(provider, redirect, "lost-code")
-  // The store restarts empty under supervision: the login is gone.
-  let assert Ok(release) =
-    transaction_store.hold(warden.transaction_store(client))
-  let assert Ok(pid) =
-    process.subject_owner(warden.transaction_store(client).subject)
+    warden.begin_login(client, browser(), warden.default_login())
+  let request = authorize(provider, redirect, "lost-code")
+  // The in-memory login store restarts empty under supervision.
+  let assert Some(name) = client.names.memory_logins
+  let assert Ok(pid) = process.named(name)
   process.kill(pid)
-  let _ = release
   process.sleep(50)
   let assert Error(warden.CallbackRejected(warden.UnknownState)) =
-    warden.complete_login(
-      client,
-      warden.QueryCallback(query),
-      Some(redirect.browser_binding),
-    )
+    warden.complete_login(client, request)
   assert support.token_requests(provider) == 0
   warden.stop(client)
   support.provider_stop(provider)
@@ -231,20 +261,20 @@ pub fn store_loss_never_authorises_exchange_test() {
 
 pub fn store_timeout_is_typed_and_sends_nothing_test() {
   let provider = support.provider_start(support.Standard)
-  let settings = config.Settings(..settings(provider), store_timeout_ms: 200)
-  let client = start(settings)
-  let assert Ok(redirect) =
-    warden.begin_login(client, None, warden.default_login())
-  let query = authorize(provider, redirect, "slow-code")
-  let assert Ok(release) =
-    transaction_store.hold(warden.transaction_store(client))
-  let assert Error(warden.TransactionStoreUnavailable) =
-    warden.complete_login(
-      client,
-      warden.QueryCallback(query),
-      Some(redirect.browser_binding),
+  let #(logins, control) = faults.memory()
+  let client =
+    start(
+      settings(provider)
+      |> config.with_store_timeout(duration.milliseconds(200))
+      |> config.with_transaction_store(logins)
+      |> config.with_sealing_key(faults.sealing_key()),
     )
-  process.send(release, Nil)
+  let assert Ok(redirect) =
+    warden.begin_login(client, browser(), warden.default_login())
+  let request = authorize(provider, redirect, "slow-code")
+  faults.set(control, fn(f) { faults.Faults(..f, get_delay_ms: 500) })
+  let assert Error(warden.TransactionStoreUnavailable) =
+    warden.complete_login(client, request)
   assert support.token_requests(provider) == 0
   warden.stop(client)
   support.provider_stop(provider)
@@ -252,45 +282,33 @@ pub fn store_timeout_is_typed_and_sends_nothing_test() {
 
 fn exchange_outcome(
   behaviour: support.Behaviour,
-  settings_fn: fn(config.Settings) -> config.Settings,
-) -> #(Result(warden.LoginCompletion, warden.LoginError), Int) {
+  configure: fn(config.Config) -> config.Config,
+) -> #(Result(warden.Session, warden.LoginError), Int) {
   let provider = support.provider_start(support.Standard)
-  let client = start(settings_fn(settings(provider)))
+  let client = start(configure(settings(provider)))
   let assert Ok(redirect) =
-    warden.begin_login(client, None, warden.default_login())
-  let code = "code-" <> param(redirect.url, "state")
-  let query = authorize(provider, redirect, code)
+    warden.begin_login(client, browser(), warden.default_login())
+  let code = "code-" <> param(warden.login_url(redirect), "state")
+  let request = authorize(provider, redirect, code)
   support.script(provider, support.Code(code), behaviour)
-  let result =
-    warden.complete_login(
-      client,
-      warden.QueryCallback(query),
-      Some(redirect.browser_binding),
-    )
+  let result = warden.complete_login(client, request)
   // The login is consumed whatever the outcome: a retry is a replay and
   // sends nothing.
   let assert Error(warden.LoginReplayed) =
-    warden.complete_login(
-      client,
-      warden.QueryCallback(query),
-      Some(redirect.browser_binding),
-    )
+    warden.complete_login(client, request)
   let requests = support.token_requests(provider)
   warden.stop(client)
   support.provider_stop(provider)
   #(result, requests)
 }
 
-fn same(s: config.Settings) -> config.Settings {
-  s
+fn same(config: config.Config) -> config.Config {
+  config
 }
 
 pub fn exchange_outcomes_are_classified_test() {
-  let short = fn(s: config.Settings) {
-    config.with_transport(
-      s,
-      config.Transport(..s.transport, request_timeout_ms: 400),
-    )
+  let short = fn(c) {
+    config.with_request_timeout(c, duration.milliseconds(400))
   }
   let cases = [
     #(
@@ -359,81 +377,120 @@ pub fn exchange_outcomes_are_classified_test() {
   })
 }
 
+/// `complete_login` has one bound (default 30 s): a slow token endpoint is
+/// cut at what the bound leaves, not at the full request timeout.
+pub fn complete_login_has_one_bound_test() {
+  let configure = fn(c) {
+    c
+    |> config.with_request_timeout(duration.seconds(10))
+    |> config.with_login_timeout(duration.milliseconds(500))
+  }
+  let started = secure.monotonic_ms()
+  let #(result, _) = exchange_outcome(support.Delay(3000), configure)
+  assert result == Error(warden.ExchangeOutcomeUnknown)
+  assert secure.monotonic_ms() - started < 2500
+}
+
+/// A login store slow enough to use up the bound: the code is never sent.
+pub fn exhausted_login_bound_sends_nothing_test() {
+  let provider = support.provider_start(support.Standard)
+  let #(logins, control) = faults.memory()
+  let client =
+    start(
+      settings(provider)
+      |> config.with_login_timeout(duration.milliseconds(300))
+      |> config.with_transaction_store(logins)
+      |> config.with_sealing_key(faults.sealing_key()),
+    )
+  let assert Ok(redirect) =
+    warden.begin_login(client, browser(), warden.default_login())
+  let request = authorize(provider, redirect, "bounded-code")
+  faults.set(control, fn(f) { faults.Faults(..f, get_delay_ms: 400) })
+  let result = warden.complete_login(client, request)
+  assert result == Error(warden.LoginTimedOut)
+    || result == Error(warden.TransactionStoreUnavailable)
+  assert support.token_requests(provider) == 0
+  warden.stop(client)
+  support.provider_stop(provider)
+}
+
 pub fn provider_down_before_exchange_is_proven_not_sent_test() {
   let provider = support.provider_start(support.Standard)
   let client = start(settings(provider))
   let assert Ok(redirect) =
-    warden.begin_login(client, None, warden.default_login())
-  let query = authorize(provider, redirect, "down-code")
+    warden.begin_login(client, browser(), warden.default_login())
+  let request = authorize(provider, redirect, "down-code")
   support.provider_stop(provider)
   let assert Error(warden.ProviderUnavailableBeforeExchange(warden.TransportFailure(
-    sent: False,
+    evidence: warden.NotSent,
     reason: warden.ConnectionRefused,
-  ))) =
-    warden.complete_login(
-      client,
-      warden.QueryCallback(query),
-      Some(redirect.browser_binding),
-    )
-  // Consumed all the same: the initial contract requires a new login.
+  ))) = warden.complete_login(client, request)
+  // Consumed all the same: a new login is needed.
   let assert Error(warden.LoginReplayed) =
-    warden.complete_login(
-      client,
-      warden.QueryCallback(query),
-      Some(redirect.browser_binding),
-    )
+    warden.complete_login(client, request)
   warden.stop(client)
 }
 
 pub fn lost_custody_acknowledgement_recovers_without_exchange_test() {
   let provider = support.provider_start(support.Standard)
+  let #(custody, control) = faults.memory()
   let client =
-    start(config.Settings(..settings(provider), store_timeout_ms: 200))
-  let assert Ok(Nil) =
-    custody_store.delay_replies(
-      warden.custody_owner(client),
-      custody_store.DelayInstall,
-      500,
+    start(
+      settings(provider)
+      |> config.with_store_timeout(duration.milliseconds(200))
+      |> config.with_custody_store(custody)
+      |> config.with_sealing_key(faults.sealing_key()),
     )
   let assert Ok(redirect) =
-    warden.begin_login(client, None, warden.default_login())
-  let query = authorize(provider, redirect, "custody-code")
-  let assert Ok(warden.LoginRecoveryRequired(recovery)) =
-    warden.complete_login(
-      client,
-      warden.QueryCallback(query),
-      Some(redirect.browser_binding),
-    )
-  process.sleep(600)
-  let assert Ok(Nil) =
-    custody_store.delay_replies(
-      warden.custody_owner(client),
-      custody_store.DelayNothing,
-      0,
-    )
-  let assert Ok(warden.CustodyRecovered(session)) =
-    warden.recover_custody(client, recovery)
+    warden.begin_login(client, browser(), warden.default_login())
+  let request = authorize(provider, redirect, "custody-code")
+  faults.lose_ack_of(control, 1)
+  let assert Error(warden.CustodyUnconfirmed(recovery) as error) =
+    warden.complete_login(client, request)
+  assert warden.login_error_action(error) == warden.Recover
+  let assert Ok(session) = warden.recover_custody(client, recovery)
   // Idempotent: the same command yields the same installed session.
-  let assert Ok(warden.CustodyRecovered(again)) =
-    warden.recover_custody(client, recovery)
+  let assert Ok(again) = warden.recover_custody(client, recovery)
   assert warden.session_reference(session) == warden.session_reference(again)
-  assert warden.session_revision(session) == 1
   assert support.token_requests(provider) == 1
   // After logout the recovery cannot resurrect the session (finding F5).
-  let assert Ok(_) =
-    warden.logout(
-      client,
-      session,
-      warden.LogoutOptions(post_logout_redirect_uri: None, state: None),
-    )
+  let assert Ok(_) = warden.logout(client, session, warden.default_logout())
   assert warden.recover_custody(client, recovery) == Error(warden.RecoveryEnded)
   // A different client configuration cannot use the recovery.
   let other_provider = support.provider_start(support.Standard)
   let other = start(settings(other_provider))
-  let assert Error(warden.RecoveryOwnerMismatch) =
-    warden.recover_custody(other, recovery)
+  assert warden.recover_custody(other, recovery)
+    == Error(warden.RecoveryForeign)
   warden.stop(other)
   support.provider_stop(other_provider)
+  warden.stop(client)
+  support.provider_stop(provider)
+}
+
+/// A recovery older than the login lifetime is refused, so a stale value
+/// cannot re-install a session whose record has expired.
+pub fn old_custody_recovery_expires_test() {
+  let provider = support.provider_start(support.Standard)
+  let base = support.now_seconds()
+  let clock = support.clock_new(base)
+  let #(custody, control) = faults.memory()
+  let client =
+    start(
+      settings(provider)
+      |> config.with_store_timeout(duration.milliseconds(200))
+      |> config.with_custody_store(custody)
+      |> config.with_sealing_key(faults.sealing_key())
+      |> with_clock(clock),
+    )
+  let assert Ok(redirect) =
+    warden.begin_login(client, browser(), warden.default_login())
+  let request = authorize(provider, redirect, "old-code")
+  faults.lose_ack_of(control, 1)
+  let assert Error(warden.CustodyUnconfirmed(recovery)) =
+    warden.complete_login(client, request)
+  support.clock_set(clock, base + 601)
+  assert warden.recover_custody(client, recovery)
+    == Error(warden.RecoveryExpired)
   warden.stop(client)
   support.provider_stop(provider)
 }
@@ -442,25 +499,18 @@ pub fn max_age_requires_recent_authentication_test() {
   let provider = support.provider_start(support.Standard)
   let client = start(settings(provider))
   let options = fn(age) {
-    warden.LoginOptions(..warden.default_login(), max_age: Some(age))
+    warden.LoginOptions(
+      ..warden.default_login(),
+      max_age: Some(duration.seconds(age)),
+    )
   }
-  let assert Ok(strict) = warden.begin_login(client, None, options(1))
-  assert param(strict.url, "max_age") == "1"
-  let query = authorize(provider, strict, "strict-code")
+  let assert Ok(strict) = warden.begin_login(client, browser(), options(1))
+  assert param(warden.login_url(strict), "max_age") == "1"
   let assert Error(warden.IdentityRejected(warden.AuthenticationTooOld)) =
-    warden.complete_login(
-      client,
-      warden.QueryCallback(query),
-      Some(strict.browser_binding),
-    )
-  let assert Ok(relaxed) = warden.begin_login(client, None, options(300))
-  let query = authorize(provider, relaxed, "relaxed-code")
-  let assert Ok(warden.LoginCompleted(_)) =
-    warden.complete_login(
-      client,
-      warden.QueryCallback(query),
-      Some(relaxed.browser_binding),
-    )
+    warden.complete_login(client, authorize(provider, strict, "strict-code"))
+  let assert Ok(relaxed) = warden.begin_login(client, browser(), options(300))
+  let assert Ok(_) =
+    warden.complete_login(client, authorize(provider, relaxed, "relaxed-code"))
   warden.stop(client)
   support.provider_stop(provider)
 }
@@ -476,43 +526,30 @@ pub fn future_authentication_time_fails_max_age_test() {
   let assert Ok(redirect) =
     warden.begin_login(
       client,
-      None,
-      warden.LoginOptions(..warden.default_login(), max_age: Some(300)),
+      browser(),
+      warden.LoginOptions(
+        ..warden.default_login(),
+        max_age: Some(duration.seconds(300)),
+      ),
     )
-  let query = authorize(provider, redirect, "future-code")
   let assert Error(warden.IdentityRejected(warden.AuthenticationTooOld)) =
-    warden.complete_login(
-      client,
-      warden.QueryCallback(query),
-      Some(redirect.browser_binding),
-    )
+    warden.complete_login(client, authorize(provider, redirect, "future-code"))
   warden.stop(client)
   support.provider_stop(provider)
 }
 
-/// Pending-login lifetimes run on the monotonic clock, so a wall-clock step
-/// (NTP) neither extends nor cuts them short (review finding F9).
-pub fn login_lifetime_follows_the_monotonic_clock_test() {
+/// Pending-login lifetimes are wall-clock Unix time, so a durable login
+/// store shared by several nodes agrees on them (decision D20).
+pub fn login_lifetime_follows_the_wall_clock_test() {
   let provider = support.provider_start(support.Standard)
-  let monotonic = support.clock_new(1000)
-  let assert Ok(validated) = config.validate(settings(provider))
-  let assert Ok(client) =
-    warden.start_with_clocks(
-      validated,
-      wall: support.now_seconds,
-      monotonic: fn() { support.clock_read(monotonic) },
-    )
+  let base = support.now_seconds()
+  let clock = support.clock_new(base)
+  let client = start(settings(provider) |> with_clock(clock))
   let assert Ok(redirect) =
-    warden.begin_login(client, None, warden.default_login())
-  let query = authorize(provider, redirect, "monotonic-code")
-  // Ten minutes pass on the monotonic clock; the wall clock does not move.
-  support.clock_set(monotonic, 1000 + 601)
-  assert warden.complete_login(
-      client,
-      warden.QueryCallback(query),
-      Some(redirect.browser_binding),
-    )
-    == Error(warden.LoginExpired)
+    warden.begin_login(client, browser(), warden.default_login())
+  let request = authorize(provider, redirect, "wall-code")
+  support.clock_set(clock, base + 601)
+  assert warden.complete_login(client, request) == Error(warden.LoginExpired)
   warden.stop(client)
   support.provider_stop(provider)
 }
@@ -529,15 +566,16 @@ pub fn slightly_future_authentication_time_is_tolerated_test() {
   let assert Ok(redirect) =
     warden.begin_login(
       client,
-      None,
-      warden.LoginOptions(..warden.default_login(), max_age: Some(300)),
+      browser(),
+      warden.LoginOptions(
+        ..warden.default_login(),
+        max_age: Some(duration.seconds(300)),
+      ),
     )
-  let query = authorize(provider, redirect, "tolerated-code")
-  let assert Ok(warden.LoginCompleted(_)) =
+  let assert Ok(_) =
     warden.complete_login(
       client,
-      warden.QueryCallback(query),
-      Some(redirect.browser_binding),
+      authorize(provider, redirect, "tolerated-code"),
     )
   warden.stop(client)
   support.provider_stop(provider)
@@ -549,7 +587,7 @@ pub fn login_options_are_validated_test() {
   let with = fn(extra) {
     warden.begin_login(
       client,
-      None,
+      browser(),
       warden.LoginOptions(..warden.default_login(), extra_parameters: extra),
     )
   }
@@ -560,16 +598,39 @@ pub fn login_options_are_validated_test() {
   ))) = with([#("Redirect_URI", "https://evil.example")])
   let assert Error(warden.InvalidLoginOption(warden.InvalidParameterValue(_))) =
     with([#("x", "a\nb")])
+  // Login option values are bounded (2 KiB each).
+  let assert Error(warden.InvalidLoginOption(warden.OptionTooLong("big"))) =
+    with([#("big", string.repeat("a", 2049))])
+  let assert Error(warden.InvalidLoginOption(warden.OptionTooLong("login_hint"))) =
+    warden.begin_login(
+      client,
+      browser(),
+      warden.LoginOptions(
+        ..warden.default_login(),
+        login_hint: Some(string.repeat("h", 2049)),
+      ),
+    )
   let assert Ok(redirect) = with([#("resource", "https://api.example")])
-  assert param(redirect.url, "resource") == "https://api.example"
+  assert param(warden.login_url(redirect), "resource") == "https://api.example"
   let assert Error(warden.InvalidLoginOption(warden.InvalidOptionScope(_))) =
     warden.begin_login(
       client,
-      None,
+      browser(),
       warden.LoginOptions(..warden.default_login(), scopes: ["bad scope"]),
     )
   warden.stop(client)
   support.provider_stop(provider)
+}
+
+fn start_result(config: config.Config) -> Result(Nil, warden.StartError) {
+  let assert Ok(client) = warden.new(config)
+  case warden.start(client) {
+    Ok(Nil) -> {
+      warden.stop(client)
+      Ok(Nil)
+    }
+    Error(error) -> Error(error)
+  }
 }
 
 pub fn incompatible_providers_are_rejected_at_startup_test() {
@@ -587,9 +648,7 @@ pub fn incompatible_providers_are_rejected_at_startup_test() {
   ]
   list.each(cases, fn(c) {
     let provider = support.provider_start(c.0)
-    let assert Ok(validated) = config.validate(settings(provider))
-    let result = warden.start(validated) |> result_error
-    assert result == c.1
+    assert start_result(settings(provider)) == c.1
     support.provider_stop(provider)
   })
 }
@@ -602,16 +661,14 @@ pub fn unadvertised_pkce_is_accepted_only_by_explicit_policy_test() {
     |> config.with_pkce_advertisement(config.AssumeS256WhenUnadvertised)
   }
   let provider = support.provider_start(support.UnadvertisedPkce)
-  let assert Ok(strict) = config.validate(settings(provider))
-  assert warden.start(strict) |> result_error
+  assert start_result(settings(provider))
     == Error(warden.ProviderIncompatible([warden.NoS256]))
-  let assert Ok(assumed) = config.validate(assume(provider))
-  assert config.pkce_advertisement(assumed) == config.AssumeS256WhenUnadvertised
-  let assert Ok(client) = warden.start(assumed)
+  let client = start(assume(provider))
   let assert Ok(redirect) =
-    warden.begin_login(client, None, warden.default_login())
-  assert param(redirect.url, "code_challenge_method") == "S256"
-  assert string.length(param(redirect.url, "code_challenge")) == 43
+    warden.begin_login(client, browser(), warden.default_login())
+  assert param(warden.login_url(redirect), "code_challenge_method") == "S256"
+  assert string.length(param(warden.login_url(redirect), "code_challenge"))
+    == 43
   warden.stop(client)
   support.provider_stop(provider)
 
@@ -619,8 +676,7 @@ pub fn unadvertised_pkce_is_accepted_only_by_explicit_policy_test() {
   // so is an explicit empty list: only an omitted field is "unadvertised".
   list.each([support.NoS256, support.EmptyPkceMethods], fn(variant) {
     let provider = support.provider_start(variant)
-    let assert Ok(assumed) = config.validate(assume(provider))
-    assert warden.start(assumed) |> result_error
+    assert start_result(assume(provider))
       == Error(warden.ProviderIncompatible([warden.NoS256]))
     support.provider_stop(provider)
   })
@@ -632,9 +688,10 @@ pub fn authorization_endpoint_query_is_preserved_test() {
   let provider = support.provider_start(support.QueryInAuthorizationEndpoint)
   let client = start(settings(provider))
   let assert Ok(redirect) =
-    warden.begin_login(client, None, warden.default_login())
-  assert param(redirect.url, "p") == "b2c_1_signin"
-  assert string.length(param(redirect.url, "code_challenge")) == 43
+    warden.begin_login(client, browser(), warden.default_login())
+  assert param(warden.login_url(redirect), "p") == "b2c_1_signin"
+  assert string.length(param(warden.login_url(redirect), "code_challenge"))
+    == 43
   warden.stop(client)
   support.provider_stop(provider)
 }
@@ -643,17 +700,16 @@ pub fn authorization_endpoint_query_is_preserved_test() {
 /// so it must be HTTPS like the authorization endpoint (J11).
 pub fn insecure_end_session_endpoint_is_refused_test() {
   let provider = support.provider_start(support.InsecureEndSession)
-  let assert Ok(validated) = config.validate(settings(provider))
-  assert warden.start(validated) |> result_error
+  assert start_result(settings(provider))
     == Error(warden.ProviderIncompatible([warden.InsecureEndSessionEndpoint]))
   support.provider_stop(provider)
 }
 
-/// `startup_timeout_ms` bounds discovery and the first key load together.
+/// The startup timeout bounds discovery and the first key load together.
 pub fn startup_is_bounded_by_startup_timeout_test() {
   // Answers every request after 3 s.
   let server = support.server_start("localhost", support.Slow)
-  let settings =
+  let config =
     config.new(
       issuer: support.server_url(server, ""),
       client_id: "warden-rp",
@@ -662,37 +718,24 @@ pub fn startup_is_bounded_by_startup_timeout_test() {
     )
     |> config.with_trust(config.TrustAnchorsPem(support.ca_pem()))
     |> config.with_destinations(config.AllowLoopbackForTesting)
-  let assert Ok(validated) =
-    config.validate(config.Settings(..settings, startup_timeout_ms: 300))
-  let started = transport.monotonic_ms()
-  assert warden.start(validated) |> result_error
-    == Error(warden.StartupTimedOut)
-  assert transport.monotonic_ms() - started < 2000
+    |> config.with_startup_timeout(duration.milliseconds(300))
+  let started = secure.monotonic_ms()
+  assert start_result(config) == Error(warden.StartupTimedOut)
+  assert secure.monotonic_ms() - started < 2000
   support.server_stop(server)
-}
-
-fn result_error(
-  r: Result(warden.Client, warden.StartError),
-) -> Result(Nil, warden.StartError) {
-  case r {
-    Ok(client) -> {
-      warden.stop(client)
-      Ok(Nil)
-    }
-    Error(e) -> Error(e)
-  }
 }
 
 pub fn loopback_provider_is_rejected_by_default_policy_test() {
   let provider = support.provider_start(support.Standard)
-  let assert Ok(validated) =
-    config.validate(
+  assert start_result(
       settings(provider) |> config.with_destinations(config.PublicInternetOnly),
     )
-  let assert Error(warden.DiscoveryFailed(warden.TransportFailure(
-    sent: False,
-    reason: warden.DestinationRejected,
-  ))) = warden.start(validated)
+    == Error(
+      warden.DiscoveryFailed(warden.TransportFailure(
+        evidence: warden.NotSent,
+        reason: warden.DestinationRejected,
+      )),
+    )
   support.provider_stop(provider)
 }
 
@@ -702,18 +745,13 @@ pub fn missing_issuer_parameter_follows_policy_test() {
   let provider = support.provider_start(support.NoIssParameter)
   let client = start(settings(provider))
   let assert Ok(redirect) =
-    warden.begin_login(client, None, warden.default_login())
-  support.issue_code(provider, "no-iss", param(redirect.url, "nonce"))
-  let query =
-    uri.query_to_string([
-      #("code", "no-iss"),
-      #("state", param(redirect.url, "state")),
-    ])
-  let assert Ok(warden.LoginCompleted(_)) =
+    warden.begin_login(client, browser(), warden.default_login())
+  let url = warden.login_url(redirect)
+  support.issue_code(provider, "no-iss", param(url, "nonce"))
+  let assert Ok(_) =
     warden.complete_login(
       client,
-      warden.QueryCallback(query),
-      Some(redirect.browser_binding),
+      callback(redirect, [#("code", "no-iss"), #("state", param(url, "state"))]),
     )
   warden.stop(client)
   let strict =
@@ -722,17 +760,12 @@ pub fn missing_issuer_parameter_follows_policy_test() {
       |> config.with_issuer_parameter(config.AlwaysRequireIssuer),
     )
   let assert Ok(redirect) =
-    warden.begin_login(strict, None, warden.default_login())
-  let query =
-    uri.query_to_string([
-      #("code", "x"),
-      #("state", param(redirect.url, "state")),
-    ])
+    warden.begin_login(strict, browser(), warden.default_login())
+  let url = warden.login_url(redirect)
   let assert Error(warden.CallbackRejected(warden.CallbackIssuerMissing)) =
     warden.complete_login(
       strict,
-      warden.QueryCallback(query),
-      Some(redirect.browser_binding),
+      callback(redirect, [#("code", "x"), #("state", param(url, "state"))]),
     )
   warden.stop(strict)
   support.provider_stop(provider)
@@ -743,18 +776,15 @@ pub fn denial_codes_are_closed_test() {
   let client = start(settings(provider))
   let deny = fn(code) {
     let assert Ok(redirect) =
-      warden.begin_login(client, None, warden.default_login())
+      warden.begin_login(client, browser(), warden.default_login())
     warden.complete_login(
       client,
-      warden.QueryCallback(
-        uri.query_to_string([
-          #("error", code),
-          #("error_description", "secret-looking description"),
-          #("state", param(redirect.url, "state")),
-          #("iss", support.provider_issuer(provider)),
-        ]),
-      ),
-      Some(redirect.browser_binding),
+      callback(redirect, [
+        #("error", code),
+        #("error_description", "secret-looking description"),
+        #("state", param(warden.login_url(redirect), "state")),
+        #("iss", support.provider_issuer(provider)),
+      ]),
     )
   }
   assert deny("access_denied")
@@ -772,26 +802,48 @@ pub fn form_post_mode_rejects_query_callbacks_test() {
   let client =
     start(settings(provider) |> config.with_response_mode(config.FormPost))
   let assert Ok(redirect) =
-    warden.begin_login(client, None, warden.default_login())
-  assert param(redirect.url, "response_mode") == "form_post"
-  let body = authorize(provider, redirect, "form-code")
+    warden.begin_login(client, browser(), warden.default_login())
+  assert param(warden.login_url(redirect), "response_mode") == "form_post"
+  let query = authorize(provider, redirect, "form-code")
   let assert Error(warden.CallbackMalformed(warden.UnexpectedResponseMode)) =
+    warden.complete_login(client, query)
+  let body = option.unwrap(query.query, "") |> string.replace("%20", "+")
+  let post = request.Request(..query, method: http.Post, query: None, body:)
+  // A form post must declare its content type.
+  let assert Error(warden.CallbackMalformed(warden.CallbackEncodingInvalid)) =
+    warden.complete_login(client, post)
+  let assert Ok(_) =
     warden.complete_login(
       client,
-      warden.QueryCallback(body),
-      Some(redirect.browser_binding),
-    )
-  let assert Ok(warden.LoginCompleted(_)) =
-    warden.complete_login(
-      client,
-      warden.FormPostCallback(string.replace(body, "%20", "+")),
-      Some(redirect.browser_binding),
+      request.set_header(
+        post,
+        "content-type",
+        "application/x-www-form-urlencoded",
+      ),
     )
   warden.stop(client)
   support.provider_stop(provider)
 }
 
-pub fn unused_dict_import_guard_test() {
-  // Keeps the dict import exercised for set_claims-based tests below.
-  assert dict.size(dict.new()) == 0
+/// The binding cookie is the browser's, and only its digest is stored: a
+/// callback without it, or with another browser's, is refused without
+/// consuming the login.
+pub fn callbacks_must_carry_this_browsers_binding_test() {
+  let provider = support.provider_start(support.Standard)
+  let client = start(settings(provider))
+  let assert Ok(redirect) =
+    warden.begin_login(client, browser(), warden.default_login())
+  let assert Ok(other) =
+    warden.begin_login(client, browser(), warden.default_login())
+  let request = authorize(provider, redirect, "bound-code")
+  let bare = request.Request(..request, headers: [])
+  assert warden.complete_login(client, bare)
+    == Error(warden.CallbackRejected(warden.BrowserBindingMissing))
+  let foreign =
+    request.Request(..request, headers: testing.browser_request(other).headers)
+  assert warden.complete_login(client, foreign)
+    == Error(warden.CallbackRejected(warden.BrowserBindingMismatch))
+  let assert Ok(_) = warden.complete_login(client, request)
+  warden.stop(client)
+  support.provider_stop(provider)
 }

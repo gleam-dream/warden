@@ -134,7 +134,7 @@ pub fn discover(
   policy: transport.Policy,
   deadline: Int,
 ) -> Result(Discovered, Failure) {
-  use policy <- result.try(within(policy, deadline))
+  use policy <- result.try(within_deadline(policy, deadline))
   use #(document, response) <- result.try(
     get(policy, discovery_url(issuer)) |> json_response,
   )
@@ -146,18 +146,18 @@ pub fn discover(
     True -> Ok(Nil)
     False -> Error(protocol.Policy("issuer_mismatch"))
   })
-  use policy <- result.try(within(policy, deadline))
+  use policy <- result.try(within_deadline(policy, deadline))
   use keys <- result.try(load_keys(jwks_uri, policy))
   Ok(Discovered(metadata:, jwks_uri:, keys:, ttl_ms: ttl(response.headers)))
 }
 
-/// Rediscovery outside `warden.start` (restart, reload): two request
-/// timeouts, inside the actor initialiser's three.
+/// Rediscovery outside `warden.start` (background discovery, reload): two
+/// request timeouts.
 fn background_deadline(policy: transport.Policy) -> Int {
   transport.monotonic_ms() + 2 * policy.timeout_ms
 }
 
-fn within(
+fn within_deadline(
   policy: transport.Policy,
   deadline: Int,
 ) -> Result(transport.Policy, Failure) {
@@ -251,6 +251,7 @@ fn metadata_decoder() -> decode.Decoder(#(Metadata, String)) {
   use token_endpoint <- optional_string("token_endpoint")
   use userinfo_endpoint <- optional_string("userinfo_endpoint")
   use introspection_endpoint <- optional_string("introspection_endpoint")
+  use revocation_endpoint <- optional_string("revocation_endpoint")
   use end_session_endpoint <- optional_string("end_session_endpoint")
   use code_challenge_methods <- decode.optional_field(
     "code_challenge_methods_supported",
@@ -303,6 +304,7 @@ fn metadata_decoder() -> decode.Decoder(#(Metadata, String)) {
       token_endpoint:,
       userinfo_endpoint:,
       introspection_endpoint:,
+      revocation_endpoint:,
       end_session_endpoint:,
       code_challenge_methods:,
       grant_types:,
@@ -322,11 +324,13 @@ fn metadata_decoder() -> decode.Decoder(#(Metadata, String)) {
 // Cache actor
 
 pub opaque type Message {
-  Get(reply: Subject(Snapshot))
-  RefreshKeys(kid: Option(String), reply: Subject(Snapshot))
+  Get(reply: Subject(Option(Snapshot)))
+  RefreshKeys(kid: Option(String), reply: Subject(Option(Snapshot)))
+  Discover
   Reload
   KeysLoaded(Result(JwkSet, Failure))
   Reloaded(Result(Discovered, Failure))
+  Discovery(Result(Discovered, Failure))
 }
 
 /// Network fetches run in a separate process, one at a time, so the actor
@@ -334,8 +338,9 @@ pub opaque type Message {
 type Fetch {
   Idle
   /// Callers waiting for the key refresh in flight.
-  FetchingKeys(waiters: List(Subject(Snapshot)))
+  FetchingKeys(waiters: List(Subject(Option(Snapshot))))
   Reloading
+  Discovering
 }
 
 type State {
@@ -343,7 +348,10 @@ type State {
     self: Subject(Message),
     issuer: String,
     policy: transport.Policy,
-    discovered: Discovered,
+    accept: fn(Metadata) -> Bool,
+    discovered: Option(Discovered),
+    /// Delay before the next background discovery attempt.
+    backoff_ms: Int,
     last_key_refresh: Int,
     attempted_kids: List(String),
     fetch: Fetch,
@@ -356,43 +364,51 @@ pub type Provider {
 
 const key_refresh_interval_ms = 1000
 
+const first_backoff_ms = 1000
+
+const max_backoff_ms = 60_000
+
+/// Start the provider cache. With a `seed` (from `warden.start`) it serves
+/// at once; without one (supervision, or a restart) it discovers in the
+/// background, retrying with backoff from 1 s to 60 s, and answers
+/// `NotReady` until discovery succeeds and `accept` holds for the
+/// metadata. Initialisation never waits for the provider.
 pub fn start(
   name: process.Name(Message),
   issuer: String,
   policy: transport.Policy,
   seed: Option(Discovered),
+  accept: fn(Metadata) -> Bool,
 ) -> actor.StartResult(Subject(Message)) {
-  actor.new_with_initialiser(policy.timeout_ms * 3, fn(self) {
-    // A restarted actor rediscovers; the first start uses the startup load.
-    let loaded = case seed {
-      Some(discovered) -> Ok(discovered)
-      None -> discover(issuer, policy, background_deadline(policy))
-    }
-    case loaded {
-      Error(_) -> Error("provider discovery failed")
-      Ok(discovered) -> {
+  actor.new_with_initialiser(1000, fn(self) {
+    case seed {
+      Some(discovered) -> {
         process.send_after(self, discovered.ttl_ms, Reload)
-        actor.initialised(State(
-          self:,
-          issuer:,
-          policy:,
-          discovered:,
-          last_key_refresh: monotonic_ms(),
-          attempted_kids: [],
-          fetch: Idle,
-        ))
-        |> actor.returning(self)
-        |> Ok
+        Nil
       }
+      None -> process.send(self, Discover)
     }
+    actor.initialised(State(
+      self:,
+      issuer:,
+      policy:,
+      accept:,
+      discovered: seed,
+      backoff_ms: first_backoff_ms,
+      last_key_refresh: monotonic_ms(),
+      attempted_kids: [],
+      fetch: Idle,
+    ))
+    |> actor.returning(self)
+    |> Ok
   })
   |> actor.named(name)
   |> actor.on_message(handle)
   |> actor.start
 }
 
-fn snapshot(state: State) -> Snapshot {
-  Snapshot(state.discovered.metadata, state.discovered.keys)
+fn snapshot(state: State) -> Option(Snapshot) {
+  option.map(state.discovered, fn(d) { Snapshot(d.metadata, d.keys) })
 }
 
 /// Run `fetch` in a separate process and deliver its result to the actor.
@@ -419,14 +435,51 @@ fn handle(state: State, message: Message) -> actor.Next(State, Message) {
       process.send(reply, snapshot(state))
       actor.continue(state)
     }
-    RefreshKeys(kid, reply) ->
+    Discover ->
       case state.fetch {
+        Idle -> {
+          let issuer = state.issuer
+          let policy = state.policy
+          in_background(
+            state.self,
+            fn() { discover(issuer, policy, background_deadline(policy)) },
+            Discovery,
+          )
+          actor.continue(State(..state, fetch: Discovering))
+        }
+        _ -> actor.continue(state)
+      }
+    Discovery(result) ->
+      case result {
+        Ok(discovered) ->
+          case state.accept(discovered.metadata) {
+            True -> {
+              process.send_after(state.self, discovered.ttl_ms, Reload)
+              actor.continue(
+                State(
+                  ..state,
+                  discovered: Some(discovered),
+                  backoff_ms: first_backoff_ms,
+                  fetch: Idle,
+                ),
+              )
+            }
+            False -> retry_discovery(state)
+          }
+        Error(_) -> retry_discovery(state)
+      }
+    RefreshKeys(kid, reply) ->
+      case state.fetch, state.discovered {
+        _, None -> {
+          process.send(reply, None)
+          actor.continue(state)
+        }
         // Join the refresh in flight.
-        FetchingKeys(waiters) ->
+        FetchingKeys(waiters), _ ->
           actor.continue(
             State(..state, fetch: FetchingKeys([reply, ..waiters])),
           )
-        Idle | Reloading -> {
+        _, Some(discovered) -> {
           let now = monotonic_ms()
           // At most one refresh per second, except that each new kid may
           // trigger one immediate refresh (bounded list of recent kids).
@@ -442,7 +495,7 @@ fn handle(state: State, message: Message) -> actor.Next(State, Message) {
             new_kid || now - state.last_key_refresh >= key_refresh_interval_ms
           case allowed, state.fetch {
             True, Idle -> {
-              let uri = state.discovered.jwks_uri
+              let uri = discovered.jwks_uri
               let policy = state.policy
               in_background(
                 state.self,
@@ -467,17 +520,17 @@ fn handle(state: State, message: Message) -> actor.Next(State, Message) {
         }
       }
     KeysLoaded(result) -> {
-      let state = case result {
-        Ok(keys) ->
-          State(..state, discovered: Discovered(..state.discovered, keys:))
-        Error(_) -> state
+      let state = case result, state.discovered {
+        Ok(keys), Some(discovered) ->
+          State(..state, discovered: Some(Discovered(..discovered, keys:)))
+        _, _ -> state
       }
       case state.fetch {
         FetchingKeys(waiters) ->
           list.each(waiters, fn(waiter) {
             process.send(waiter, snapshot(state))
           })
-        Idle | Reloading -> Nil
+        _ -> Nil
       }
       actor.continue(State(..state, fetch: Idle))
     }
@@ -493,34 +546,58 @@ fn handle(state: State, message: Message) -> actor.Next(State, Message) {
           )
           actor.continue(State(..state, fetch: Reloading))
         }
-        // A key refresh is in flight; try again shortly.
-        FetchingKeys(_) | Reloading -> {
+        // A fetch is in flight; try again shortly.
+        _ -> {
           process.send_after(state.self, key_refresh_interval_ms, Reload)
           actor.continue(state)
         }
       }
     Reloaded(result) -> {
       let state = case result {
-        Ok(discovered) -> State(..state, discovered:)
+        Ok(discovered) -> State(..state, discovered: Some(discovered))
         Error(_) -> state
       }
-      process.send_after(state.self, state.discovered.ttl_ms, Reload)
+      let ttl = case state.discovered {
+        Some(discovered) -> discovered.ttl_ms
+        None -> first_backoff_ms
+      }
+      process.send_after(state.self, ttl, Reload)
       actor.continue(State(..state, fetch: Idle))
     }
   }
 }
 
+fn retry_discovery(state: State) -> actor.Next(State, Message) {
+  process.send_after(state.self, state.backoff_ms, Discover)
+  actor.continue(
+    State(
+      ..state,
+      fetch: Idle,
+      backoff_ms: int.min(state.backoff_ms * 2, max_backoff_ms),
+    ),
+  )
+}
+
 pub fn snapshot_of(provider: Provider) -> Result(Snapshot, Failure) {
-  call.call(provider.subject, provider.timeout, Get)
-  |> result.replace_error(protocol.NotReady)
+  case call.call(provider.subject, provider.timeout, Get) {
+    Ok(Some(snapshot)) -> Ok(snapshot)
+    _ -> Error(protocol.NotReady)
+  }
 }
 
 pub fn refresh_keys(
   provider: Provider,
   kid: Option(String),
 ) -> Result(Snapshot, Failure) {
-  call.call(provider.subject, provider.timeout, RefreshKeys(kid, _))
-  |> result.replace_error(protocol.NotReady)
+  case call.call(provider.subject, provider.timeout, RefreshKeys(kid, _)) {
+    Ok(Some(snapshot)) -> Ok(snapshot)
+    _ -> Error(protocol.NotReady)
+  }
+}
+
+/// The same provider with calls bounded by `timeout` milliseconds.
+pub fn within(provider: Provider, timeout: Int) -> Provider {
+  Provider(..provider, timeout: int.max(1, int.min(provider.timeout, timeout)))
 }
 
 @external(erlang, "erlang", "monotonic_time")

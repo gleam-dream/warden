@@ -25,12 +25,13 @@ import gleam/io
 import gleam/list
 import gleam/result
 import gleam/string
+import gleam/time/duration
 import mist
 import simplifile
 import sinal
 import warden
 import warden/config
-import warden/observation
+import warden/telemetry
 import warden_reference/web
 import wisp
 import wisp/wisp_mist
@@ -49,7 +50,9 @@ pub fn main() -> Nil {
     "public" -> config.PublicClient
     _ -> config.ClientSecretBasic(secret)
   }
-  let settings =
+  let lifetime =
+    env("WARDEN_LOGIN_LIFETIME", "600") |> int.parse |> result.unwrap(600)
+  let configuration =
     config.new(
       issuer: env("WARDEN_ISSUER", ""),
       client_id: env("WARDEN_CLIENT_ID", ""),
@@ -61,49 +64,45 @@ pub fn main() -> Nil {
       |> list.filter(fn(s) { s != "" }),
     )
     |> config.with_response_mode(response_mode)
-    |> config.with_login_lifetime(
-      env("WARDEN_LOGIN_LIFETIME", "600") |> int.parse |> result.unwrap(600),
-    )
-  let settings = case envoy.get("WARDEN_CA_FILE") {
+    |> config.with_login_lifetime(duration.seconds(lifetime))
+  let configuration = case envoy.get("WARDEN_CA_FILE") {
     Ok(path) -> {
       let assert Ok(pem) = simplifile.read(path)
-      config.with_trust(settings, config.TrustAnchorsPem(pem))
+      config.with_trust(configuration, config.TrustAnchorsPem(pem))
     }
-    Error(Nil) -> settings
+    Error(Nil) -> configuration
   }
   // WARDEN_ASSUME_UNADVERTISED_S256=1 accepts a provider whose metadata
   // omits code_challenge_methods_supported (decision D7), such as the
   // OpenID conformance suite's test OP.
-  let settings = case env("WARDEN_ASSUME_UNADVERTISED_S256", "") {
+  let configuration = case env("WARDEN_ASSUME_UNADVERTISED_S256", "") {
     "1" ->
       config.with_pkce_advertisement(
-        settings,
+        configuration,
         config.AssumeS256WhenUnadvertised,
       )
-    _ -> settings
+    _ -> configuration
   }
-  let settings = case env("WARDEN_ALLOW_LOOPBACK", "") {
-    "1" -> config.with_destinations(settings, config.AllowLoopbackForTesting)
-    _ -> settings
+  let configuration = case env("WARDEN_ALLOW_LOOPBACK", "") {
+    "1" ->
+      config.with_destinations(configuration, config.AllowLoopbackForTesting)
+    _ -> configuration
   }
-  let validated = case config.validate(settings) {
-    Ok(validated) -> validated
-    Error(errors) ->
-      panic as { "invalid configuration: " <> string.inspect(errors) }
-  }
-  log_outbound_requests()
-  let started = warden.start(validated)
-  let client = case started {
+  let client = case warden.new(configuration) {
     Ok(client) -> client
     Error(error) ->
-      panic as { "warden did not start: " <> string.inspect(error) }
+      panic as { "warden configuration: " <> warden.describe_start_error(error) }
+  }
+  log_outbound_requests()
+  case warden.start(client) {
+    Ok(Nil) -> Nil
+    Error(error) ->
+      panic as { "warden did not start: " <> warden.describe_start_error(error) }
   }
   let context =
     web.Context(
       client:,
-      issuer: config.issuer(validated),
-      response_mode:,
-      login_lifetime: config.login_lifetime_seconds(validated),
+      issuer: env("WARDEN_ISSUER", ""),
       post_logout_redirect_uri: base_url <> "/logged-out",
       origin: base_url,
     )
@@ -122,19 +121,21 @@ pub fn main() -> Nil {
   process.sleep_forever()
 }
 
-/// One log line per outbound Warden request, from the typed observation
+/// One log line per outbound Warden request, from the typed telemetry
 /// event. The event holds no secrets, so it is safe to print whole.
 fn log_outbound_requests() -> Nil {
   let _attachment =
-    sinal.observe(observation.http_request(), fn(measurements, request) {
+    sinal.observe(telemetry.http_request(), fn(measurements, request) {
       let outcome = case request.outcome {
-        observation.Status(code) -> int.to_string(code)
-        observation.Failed(sent: True, class:) -> "failed after send: " <> class
-        observation.Failed(sent: False, class:) -> "not sent: " <> class
+        telemetry.Status(code) -> int.to_string(code)
+        telemetry.Failed(evidence: telemetry.MaybeSent, reason:) ->
+          "failed after send: " <> telemetry.transport_reason_name(reason)
+        telemetry.Failed(evidence: telemetry.NotSent, reason:) ->
+          "not sent: " <> telemetry.transport_reason_name(reason)
       }
       let method = case request.method {
-        observation.Get -> "GET"
-        observation.Post -> "POST"
+        telemetry.Get -> "GET"
+        telemetry.Post -> "POST"
       }
       io.println(
         "warden http "
