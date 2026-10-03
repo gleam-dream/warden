@@ -175,3 +175,81 @@ pub fn keys_unavailable_is_not_a_rejection_test() {
   assert resource.error_kind(error) == resource.Unavailable
   testing.stop_provider(provider)
 }
+
+/// `AudienceCheckedByCaller` skips only the `aud` comparison: the claims of
+/// a token for another resource reach the caller with their real audiences,
+/// and every other check still fails closed.
+pub fn audience_checked_by_caller_skips_only_the_audience_test() {
+  let #(provider, client, validator) = started()
+  let deferred =
+    resource.with_audience_policy(validator, resource.AudienceCheckedByCaller)
+  let verify = fn(spec) {
+    resource.verify(deferred, testing.issue_access_token(provider, spec))
+  }
+  let assert Ok(other) =
+    verify(token(provider) |> testing.with_audiences(["https://other"]))
+  assert resource.audiences(other) == ["https://other"]
+  assert resource.subject(other) == "ada"
+  let assert Ok(two) =
+    verify(
+      token(provider) |> testing.with_audiences([audience, "https://other"]),
+    )
+  assert resource.audiences(two) == [audience, "https://other"]
+  // Everything else is unchanged.
+  let wrong = testing.with_audiences(token(provider), ["https://other"])
+  assert verify(wrong |> testing.with_ttl(duration.seconds(-10)))
+    == Error(resource.TokenExpired)
+  assert verify(wrong |> testing.with_issuer("https://evil.test"))
+    == Error(resource.IssuerMismatch)
+  assert verify(wrong |> testing.forged(testing.UnsignedToken))
+    == Error(resource.UnsignedToken)
+  assert verify(wrong |> testing.forged(testing.HmacWithPublicKey))
+    == Error(resource.AlgorithmNotAllowed)
+  assert verify(wrong |> testing.forged(testing.UnknownKey))
+    == Error(resource.UnknownSigningKey)
+  assert verify(wrong |> testing.with_token_type(None))
+    == Error(resource.TokenTypeInvalid)
+  // The default policy still refuses the same token.
+  assert resource.verify(validator, testing.issue_access_token(provider, wrong))
+    == Error(resource.AudienceMismatch)
+  stop(provider, client)
+}
+
+/// Behind a framework that compares audiences, the verifier hands it the
+/// wrong resource instead of folding it into `rejected`.
+pub fn verifier_reports_a_wrong_audience_when_the_caller_compares_test() {
+  let #(provider, client, validator) = started()
+  let deferred =
+    resource.with_audience_policy(validator, resource.AudienceCheckedByCaller)
+  let attest = fn(claims) { resource.audiences(claims) }
+  let strict =
+    resource.verifier(
+      validator,
+      fn(raw) { raw },
+      attest,
+      rejected: "rejected",
+      unavailable: "unavailable",
+    )
+  let lenient =
+    resource.verifier(
+      deferred,
+      fn(raw) { raw },
+      attest,
+      rejected: "rejected",
+      unavailable: "unavailable",
+    )
+  let other =
+    testing.issue_access_token(
+      provider,
+      token(provider) |> testing.with_audiences(["https://other"]),
+    )
+  assert strict(other) == Error("rejected")
+  assert lenient(other) == Ok(["https://other"])
+  let expired =
+    testing.issue_access_token(
+      provider,
+      token(provider) |> testing.with_ttl(duration.seconds(-10)),
+    )
+  assert lenient(expired) == Error("rejected")
+  stop(provider, client)
+}

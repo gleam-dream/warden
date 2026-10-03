@@ -120,13 +120,22 @@ pub fn verify_id_token(
   Ok(claims)
 }
 
+/// How an access token's `aud` is compared with the expected audience.
+pub type AudienceMatch {
+  /// `aud` is exactly `[audience]`.
+  ExactAudience
+  /// `aud` contains the audience.
+  IncludesAudience
+  /// `aud` is not compared; the caller compares the returned claims.
+  UncheckedAudience
+}
+
 /// What an access token must satisfy (RFC 9068 §4).
 pub type AccessExpectations {
   AccessExpectations(
     issuer: String,
     audience: String,
-    /// `aud` must be exactly `[audience]`; otherwise it must contain it.
-    exact_audience: Bool,
+    audience_match: AudienceMatch,
     algorithms: List(String),
     /// The header `typ` must be `at+jwt` (or `application/at+jwt`).
     require_type: Bool,
@@ -174,18 +183,25 @@ pub fn verify_access_token(
       tolerance: expect.tolerance,
     ),
     Some(expect.issuer),
-    Some(expect.audience),
+    case expect.audience_match {
+      UncheckedAudience -> None
+      _ -> Some(expect.audience)
+    },
     require_exp: True,
   ))
   use claims <- result.try(
     jwt.decode(verified, decode.dynamic)
     |> result.replace_error(Rejection("malformed", None)),
   )
-  use _ <- result.try(case protocol.audiences(claims), expect.exact_audience {
-    [audience], True if audience == expect.audience -> Ok(Nil)
-    _, True -> reject("audience_mismatch")
-    audiences, False ->
-      case list.contains(audiences, expect.audience) {
+  use _ <- result.try(case expect.audience_match {
+    UncheckedAudience -> Ok(Nil)
+    ExactAudience ->
+      case protocol.audiences(claims) {
+        [audience] if audience == expect.audience -> Ok(Nil)
+        _ -> reject("audience_mismatch")
+      }
+    IncludesAudience ->
+      case list.contains(protocol.audiences(claims), expect.audience) {
         True -> Ok(Nil)
         False -> reject("audience_mismatch")
       }
