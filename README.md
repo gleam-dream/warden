@@ -283,8 +283,19 @@ let assert Ok(client) =
 testing.set_login(provider, testing.Refuse("access_denied"))  // the next one is cancelled
 ```
 
-A request's `login_hint` picks the user per login. Unit tests that hold
-the `LoginRedirect` skip HTTP:
+A request's `login_hint` picks the user per login. `with_granted_scopes`
+sets the scopes one user's login is granted in place of the ones the client
+requested, so a test can sign in a user who lacks a scope. The scopes are in
+the access token (`resource.scopes`) and at introspection:
+
+```gleam
+testing.provider_options()
+|> testing.with_granted_scopes("ada", ["openid", "approve:refund"])
+|> testing.with_granted_scopes("mallory", ["openid"])
+// testing.set_granted_scopes(provider, "mallory", [...]) changes it later
+```
+
+Unit tests that hold the `LoginRedirect` skip HTTP:
 
 ```gleam
 let assert Ok(redirect) =

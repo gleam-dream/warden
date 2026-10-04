@@ -19,6 +19,16 @@ and the evidence for each wave in [docs/PROGRESS.md](docs/PROGRESS.md).
   `challenge` (six tests, part of `scripts/relay-recipe`), including a check
   that introspection carries the request's correlation.
 
+### Added (round 8)
+
+- `testing.with_granted_scopes(options, subject, scopes)` and
+  `testing.set_granted_scopes(provider, subject, scopes)`: the scopes a
+  login of `subject` is granted, in place of the ones the client requested.
+  They are in the access token's `scope` claim (`resource.scopes`), the
+  token response and introspection, so a test can sign in a user who lacks
+  a scope (D40). Additive: `LoginDecision` and `with_login` are unchanged.
+  `resource.scopes`, `subject` and `issuer` already exist.
+
 ### Changed (breaking, wave 5)
 
 - `resource.verifier` takes `on_error: fn(ErrorKind) -> e` instead of

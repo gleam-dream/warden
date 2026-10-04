@@ -69,6 +69,38 @@ never shipped and is gone (D38).
 http_gun_config.Anchors([testing.trust_anchor_der(provider)])
 ```
 
+## Round 8: scopes per login in `warden/testing` (additive)
+
+Verified approvers (fabric) need an authenticated user who lacks a scope.
+The provider granted the scopes the client requested, so a test could not
+sign in mallory without `approve:refund`.
+
+| Before                                              | After                                                                           |
+| --------------------------------------------------- | ------------------------------------------------------------------------------- |
+| `/authorize` grants the scopes the client requested | adds `with_granted_scopes(ProviderOptions, subject, scopes) -> ProviderOptions` |
+| the grant could not change after start              | adds `set_granted_scopes(Provider, subject, scopes) -> Nil`                     |
+
+```gleam
+// After: ada may approve refunds, mallory signs in but may not.
+let assert Ok(provider) =
+  testing.start_provider(
+    testing.provider_options()
+    |> testing.with_granted_scopes("ada", ["openid", "approve:refund"])
+    |> testing.with_granted_scopes("mallory", ["openid"]),
+  )
+// ... a login with login_hint "mallory" ...
+let assert Ok(claims) = resource.verify(validator, token)
+resource.scopes(claims)  // ["openid"]
+```
+
+The granted list replaces the requested scopes exactly (it is granted even
+if unrequested; `openid` is not added), and a subject with no entry gets
+the requested ones. The list is in the access token's `scope` claim, the
+token response and introspection. `LoginDecision`, `SignIn` and `with_login`
+are unchanged, so no dependent breaks (D40). `resource.scopes`, `subject`
+and `issuer` already exist and need no change. Dependent: fabric's
+`approvers_warden` consumer (round 8) uses it.
+
 ## Decided, not changed
 
 - No JWK or JWKS trust anchor ([D39](decisions.md)); `config.Trust` stays

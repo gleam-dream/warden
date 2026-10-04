@@ -361,3 +361,56 @@ pub fn access_token_audience_set_after_start_test() {
   assert info.audiences == [testing.client_id(provider)]
   stop(provider, client)
 }
+
+/// A login granted fewer scopes than the client requested gets a token
+/// with only the granted ones, in the JWT that `resource.verify` reads, in
+/// the token response and at introspection. Another user is untouched.
+pub fn granted_scopes_replace_the_requested_ones_per_subject_test() {
+  let #(provider, client) =
+    started(
+      testing.provider_options()
+        |> testing.with_access_token_audiences(["https://api.test"])
+        |> testing.with_granted_scopes("mallory", ["openid", "read"]),
+      fn(c) { c },
+    )
+  let validator = resource.new(client, audience: "https://api.test")
+  let requested =
+    warden.LoginOptions(..warden.default_login(), scopes: [
+      "read",
+      "approve:refund",
+    ])
+  let login = fn(hint) {
+    let assert Ok(redirect) =
+      warden.begin_login(
+        client,
+        request.new(),
+        warden.LoginOptions(..requested, login_hint: Some(hint)),
+      )
+    let assert Ok(session) =
+      warden.complete_login(client, follow(provider, redirect).1)
+    let assert Ok(access) = warden.access_token(client, session)
+    #(warden.access_token_value(access.token), access.scopes)
+  }
+  let #(mallory, response_scopes) = login("mallory")
+  assert response_scopes == ["openid", "read"]
+  let assert Ok(claims) = resource.verify(validator, mallory)
+  assert resource.subject(claims) == "mallory"
+  assert resource.scopes(claims) == ["openid", "read"]
+  assert resource.issuer(claims) == testing.issuer(provider)
+  let assert Ok(warden.ActiveToken(info)) = warden.introspect(client, mallory)
+  assert info.scopes == ["openid", "read"]
+  // A subject with no entry gets what the client asked for.
+  let #(ada, _) = login("ada")
+  let assert Ok(claims) = resource.verify(validator, ada)
+  assert resource.scopes(claims) == ["openid", "read", "approve:refund"]
+  // `set_granted_scopes` changes later logins, and `[]` grants nothing.
+  testing.set_granted_scopes(provider, "ada", ["approve:refund"])
+  let #(ada, _) = login("ada")
+  let assert Ok(claims) = resource.verify(validator, ada)
+  assert resource.scopes(claims) == ["approve:refund"]
+  testing.set_granted_scopes(provider, "ada", [])
+  let #(ada, _) = login("ada")
+  let assert Ok(claims) = resource.verify(validator, ada)
+  assert resource.scopes(claims) == []
+  stop(provider, client)
+}

@@ -740,3 +740,23 @@ correlation)`), so the call joins its MCP request in telemetry. Relay says
   certificate already exists in that form: `testing.trust_anchor_der(provider)
 -> BitArray` is the root HTTP Gun's `Anchors` takes. `config.Trust` stays
   PEM, since a configuration holds text read from a file or a secret store.
+
+## D40 — Scripted scopes are per subject, not per `LoginDecision` (round 8)
+
+- The approvers recipe needs an authenticated user who lacks a scope
+  (mallory signs in but has no `approve:refund`). The provider granted the
+  scopes the client requested, so no test could show it.
+- Scopes belong to the user, not to the login script: `with_granted_scopes`
+  and `set_granted_scopes` map a subject to the scopes its logins are granted.
+  `LoginDecision.SignIn(subject)` keeps its arity, so no dependent that
+  builds or matches it breaks, and one provider serves several users with
+  different scopes through `login_hint`, as it already serves several
+  subjects.
+- The list replaces the requested scopes exactly. It is granted even if the
+  client did not request it, and `openid` is not added. A subject with no
+  entry gets what the client requested. `[]` grants no scope. One rule, no
+  intersection to predict.
+- The same grant feeds the access token's `scope` claim, the token response
+  and introspection, because all three read the recorded grant.
+- Not added: `SignIn(subject, scopes)`. It would break every match on
+  `SignIn`, and a per-decision list cannot differ per `login_hint` user.

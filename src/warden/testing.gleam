@@ -97,6 +97,7 @@ pub opaque type ProviderOptions {
     refresh_delay_ms: Int,
     scopes: List(String),
     login: LoginDecision,
+    granted_scopes: Dict(String, List(String)),
   )
 }
 
@@ -126,6 +127,7 @@ pub fn provider_options() -> ProviderOptions {
     refresh_delay_ms: 0,
     scopes: ["openid", "email", "profile"],
     login: SignIn("test-user"),
+    granted_scopes: dict.new(),
   )
 }
 
@@ -135,6 +137,32 @@ pub fn with_login(
   decision: LoginDecision,
 ) -> ProviderOptions {
   ProviderOptions(..options, login: decision)
+}
+
+/// The scopes a login of `subject` is granted, in place of the scopes the
+/// client requested. The access token's `scope` claim, the token response
+/// and introspection all carry exactly this list, so a test can sign in a
+/// user who lacks a scope:
+///
+/// ```gleam
+/// testing.provider_options()
+/// |> testing.with_granted_scopes("ada", ["openid", "approve:refund"])
+/// |> testing.with_granted_scopes("mallory", ["openid"])
+/// ```
+///
+/// The list is granted whether or not the client requested it, and
+/// `openid` is not added: list it if the test needs it. A subject without
+/// an entry gets the scopes the client requested. The subject is the one
+/// that signs in, so it also applies to a `login_hint`.
+pub fn with_granted_scopes(
+  options: ProviderOptions,
+  subject: String,
+  scopes: List(String),
+) -> ProviderOptions {
+  ProviderOptions(
+    ..options,
+    granted_scopes: dict.insert(options.granted_scopes, subject, scopes),
+  )
 }
 
 /// The one registered client. It authenticates with `client_secret_basic`
@@ -384,6 +412,18 @@ pub fn set_login(provider: Provider, decision: LoginDecision) -> Nil {
   })
 }
 
+/// What `with_granted_scopes` does, for logins from now on. An empty list
+/// grants no scope at all.
+pub fn set_granted_scopes(
+  provider: Provider,
+  subject: String,
+  scopes: List(String),
+) -> Nil {
+  transact(provider.state, fn(s) {
+    #(State(..s, options: with_granted_scopes(s.options, subject, scopes)), Nil)
+  })
+}
+
 /// Make the provider's clock run ahead (positive) or behind: issued tokens
 /// carry `iat` (and `auth_time`) shifted by `skew`.
 pub fn set_clock_skew(provider: Provider, skew: Duration) -> Nil {
@@ -563,7 +603,8 @@ fn grant_code(
       nonce: details.nonce,
       challenge: details.challenge,
       redirect_uri: front.redirect_uri,
-      scopes: details.scopes,
+      scopes: dict.get(state.options.granted_scopes, subject)
+        |> result.unwrap(details.scopes),
       auth_time: now(state),
     )
   #(State(..state, codes: dict.insert(state.codes, code, grant)), code)
