@@ -89,7 +89,7 @@ pub type StartError {
   DiscoveryFailed(ProviderFailure)
   /// The provider's metadata is incompatible with Warden's policy.
   ProviderIncompatible(List(Incompatibility))
-  /// Metadata or keys did not load within the startup timeout.
+  /// Discovery or previous-process cleanup exceeded the startup timeout.
   StartupTimedOut
   /// The client's processes are already running.
   AlreadyStarted
@@ -228,18 +228,27 @@ pub fn start(client: Client) -> Result(Nil, StartError) {
     [] -> Ok(Nil)
     problems -> Error(ProviderIncompatible(problems))
   })
-  start_tree(client, Some(discovered)) |> result.replace(Nil)
+  start_tree(client, Some(discovered), deadline) |> result.replace(Nil)
 }
 
 /// A child specification for an application supervision tree. The child
 /// starts at once and discovers the provider in the background, retrying
 /// with backoff from 1 s to 60 s; until discovery succeeds and the metadata
 /// is compatible, operations fail with `ProviderNotReady`. A restart keeps
-/// the same names, so `client` stays valid.
+/// the same names, so `client` stays valid. Before reusing those names,
+/// startup joins previous child processes within the configured startup
+/// timeout. Background provider discovery then retries independently.
 pub fn supervised(client: Client) -> supervision.ChildSpecification(Client) {
   supervision.supervisor(fn() {
     case
-      ensure_applications() |> result.try(fn(_) { start_tree(client, None) })
+      ensure_applications()
+      |> result.try(fn(_) {
+        start_tree(
+          client,
+          None,
+          secure.monotonic_ms() + client.settings.startup_timeout_ms,
+        )
+      })
     {
       Ok(pid) -> Ok(actor.Started(pid:, data: client))
       Error(error) -> Error(actor.InitFailed(describe_start_error(error)))
@@ -247,8 +256,11 @@ pub fn supervised(client: Client) -> supervision.ChildSpecification(Client) {
   })
 }
 
-/// Stop the client's processes. Returns once its supervisor has exited (at
-/// most five seconds), so a request started afterwards fails as not sent.
+/// Request shutdown of the client's processes and wait up to five seconds
+/// for supervisor exit. Returning does not prove shutdown if that wait expires.
+/// Cache exit triggers cancellation of its background fetch independently
+/// of the provider timeout or a blocked telemetry handler; this call does
+/// not synchronously join the worker.
 /// A client started with `supervised` belongs to its parent supervisor:
 /// stop it there, or the parent restarts it.
 pub fn stop(client: Client) -> Nil {
@@ -294,9 +306,18 @@ fn ensure_applications() -> Result(Nil, StartError) {
 fn start_tree(
   client: Client,
   seed: Option(provider.Discovered),
+  deadline: Int,
 ) -> Result(process.Pid, StartError) {
   let settings = client.settings
   let names = client.names
+  use _ <- result.try(case process.named(names.supervisor) {
+    Ok(_) -> Error(AlreadyStarted)
+    Error(Nil) -> Ok(Nil)
+  })
+  use _ <- result.try(
+    runtime.await_previous_children(names, deadline)
+    |> result.replace_error(StartupTimedOut),
+  )
   let accept = fn(metadata) { compatibility(settings, metadata) == [] }
   let memory = fn(builder, name, capacity) {
     case name {
@@ -485,7 +506,7 @@ pub fn describe_start_error(error: StartError) -> String {
       "the provider is incompatible with Warden's policy: "
       <> string.join(list.map(problems, describe_incompatibility), "; ")
     StartupTimedOut ->
-      "discovery and keys did not load within the startup timeout (with_startup_timeout)"
+      "discovery or previous-process cleanup exceeded the startup timeout (with_startup_timeout)"
     AlreadyStarted -> "the client is already started"
     ProcessStartFailed -> "a Warden process failed to start"
   }

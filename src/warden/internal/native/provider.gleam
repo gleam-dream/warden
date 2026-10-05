@@ -5,8 +5,13 @@
 //// derived from `cache-control` (bounded), and refreshes keys on demand for
 //// an unknown `kid`, at most once per second. A failed reload keeps the
 //// previous values. Unusable JWKs are skipped (RFC 7517 §5).
+////
+//// Each asynchronous fetch belongs to one cache incarnation. Its guardian
+//// terminates the worker on owner loss, including while a telemetry observer
+//// blocks after HTTP completes. Results and timers address the process, not
+//// its restart-stable name. Worker loss retains the last accepted snapshot;
+//// discovery retry and reload keep their existing bounded cadence.
 
-import exception
 import gleam/bit_array
 import gleam/dict
 import gleam/dynamic.{type Dynamic}
@@ -24,6 +29,7 @@ import gose/jose/jwk
 import gose/jose/key_set.{type JwkSet}
 import warden/internal/call
 import warden/internal/key_policy
+import warden/internal/native/provider_fetch.{type Background}
 import warden/internal/protocol.{type Failure, type Metadata}
 import warden/internal/transport
 
@@ -328,9 +334,10 @@ pub opaque type Message {
   RefreshKeys(kid: Option(String), reply: Subject(Option(Snapshot)))
   Discover
   Reload
-  KeysLoaded(Result(JwkSet, Failure))
-  Reloaded(Result(Discovered, Failure))
-  Discovery(Result(Discovered, Failure))
+  KeysLoaded(process.Pid, Result(JwkSet, Failure))
+  Reloaded(process.Pid, Result(Discovered, Failure))
+  Discovery(process.Pid, Result(Discovered, Failure))
+  FetchExited(process.Down)
 }
 
 /// Network fetches run in a separate process, one at a time, so the actor
@@ -338,9 +345,9 @@ pub opaque type Message {
 type Fetch {
   Idle
   /// Callers waiting for the key refresh in flight.
-  FetchingKeys(waiters: List(Subject(Option(Snapshot))))
-  Reloading
-  Discovering
+  FetchingKeys(worker: Background, waiters: List(Subject(Option(Snapshot))))
+  Reloading(worker: Background)
+  Discovering(worker: Background)
 }
 
 type State {
@@ -380,7 +387,9 @@ pub fn start(
   seed: Option(Discovered),
   accept: fn(Metadata) -> Bool,
 ) -> actor.StartResult(Subject(Message)) {
-  actor.new_with_initialiser(1000, fn(self) {
+  actor.new_with_initialiser(1000, fn(named) {
+    // Timers and fetch results belong to this incarnation, never its name.
+    let self = process.new_subject()
     case seed {
       Some(discovered) -> {
         process.send_after(self, discovered.ttl_ms, Reload)
@@ -399,7 +408,13 @@ pub fn start(
       attempted_kids: [],
       fetch: Idle,
     ))
-    |> actor.returning(self)
+    |> actor.selecting(
+      process.new_selector()
+      |> process.select(named)
+      |> process.select(self)
+      |> process.select_monitors(FetchExited),
+    )
+    |> actor.returning(named)
     |> Ok
   })
   |> actor.named(name)
@@ -411,26 +426,49 @@ fn snapshot(state: State) -> Option(Snapshot) {
   option.map(state.discovered, fn(d) { Snapshot(d.metadata, d.keys) })
 }
 
-/// Run `fetch` in a separate process and deliver its result to the actor.
-/// The transport contains its own exceptions; `rescue` covers the rest so a
-/// result always arrives.
-fn in_background(
-  self: Subject(Message),
-  fetch: fn() -> Result(a, Failure),
-  deliver: fn(Result(a, Failure)) -> Message,
-) -> Nil {
-  process.spawn_unlinked(fn() {
-    let result = case exception.rescue(fetch) {
-      Ok(result) -> result
-      Error(_) -> Error(protocol.Unmapped)
+/// Completion and guardian DOWN are ordered signals from the same process.
+/// Matching the active guardian also makes a delayed terminal message inert.
+fn active_background(fetch: Fetch) -> Option(Background) {
+  case fetch {
+    Idle -> None
+    FetchingKeys(worker, _) | Reloading(worker) | Discovering(worker) ->
+      Some(worker)
+  }
+}
+
+fn finish_background(state: State, pid: process.Pid) -> Bool {
+  case active_background(state.fetch) {
+    Some(worker) if worker.pid == pid -> {
+      process.demonitor_process(worker.monitor)
+      True
     }
-    process.send(self, deliver(result))
-  })
-  Nil
+    _ -> False
+  }
+}
+
+fn fetch_exited(
+  state: State,
+  down: process.Down,
+) -> actor.Next(State, Message) {
+  case down, active_background(state.fetch) {
+    process.ProcessDown(monitor, pid, _), Some(worker)
+      if monitor == worker.monitor && pid == worker.pid
+    ->
+      case state.fetch {
+        FetchingKeys(_, _) ->
+          handle(state, KeysLoaded(pid, Error(protocol.Unmapped)))
+        Reloading(_) -> handle(state, Reloaded(pid, Error(protocol.Unmapped)))
+        Discovering(_) ->
+          handle(state, Discovery(pid, Error(protocol.Unmapped)))
+        Idle -> actor.continue(state)
+      }
+    _, _ -> actor.continue(state)
+  }
 }
 
 fn handle(state: State, message: Message) -> actor.Next(State, Message) {
   case message {
+    FetchExited(down) -> fetch_exited(state, down)
     Get(reply) -> {
       process.send(reply, snapshot(state))
       actor.continue(state)
@@ -440,33 +478,38 @@ fn handle(state: State, message: Message) -> actor.Next(State, Message) {
         Idle -> {
           let issuer = state.issuer
           let policy = state.policy
-          in_background(
-            state.self,
-            fn() { discover(issuer, policy, background_deadline(policy)) },
-            Discovery,
-          )
-          actor.continue(State(..state, fetch: Discovering))
+          let worker =
+            provider_fetch.start(
+              state.self,
+              fn() { discover(issuer, policy, background_deadline(policy)) },
+              Discovery,
+            )
+          actor.continue(State(..state, fetch: Discovering(worker)))
         }
         _ -> actor.continue(state)
       }
-    Discovery(result) ->
-      case result {
-        Ok(discovered) ->
-          case state.accept(discovered.metadata) {
-            True -> {
-              process.send_after(state.self, discovered.ttl_ms, Reload)
-              actor.continue(
-                State(
-                  ..state,
-                  discovered: Some(discovered),
-                  backoff_ms: first_backoff_ms,
-                  fetch: Idle,
-                ),
-              )
-            }
-            False -> retry_discovery(state)
+    Discovery(pid, result) ->
+      case finish_background(state, pid) {
+        False -> actor.continue(state)
+        True ->
+          case result {
+            Ok(discovered) ->
+              case state.accept(discovered.metadata) {
+                True -> {
+                  process.send_after(state.self, discovered.ttl_ms, Reload)
+                  actor.continue(
+                    State(
+                      ..state,
+                      discovered: Some(discovered),
+                      backoff_ms: first_backoff_ms,
+                      fetch: Idle,
+                    ),
+                  )
+                }
+                False -> retry_discovery(state)
+              }
+            Error(_) -> retry_discovery(state)
           }
-        Error(_) -> retry_discovery(state)
       }
     RefreshKeys(kid, reply) ->
       case state.fetch, state.discovered {
@@ -475,9 +518,9 @@ fn handle(state: State, message: Message) -> actor.Next(State, Message) {
           actor.continue(state)
         }
         // Join the refresh in flight.
-        FetchingKeys(waiters), _ ->
+        FetchingKeys(worker, waiters), _ ->
           actor.continue(
-            State(..state, fetch: FetchingKeys([reply, ..waiters])),
+            State(..state, fetch: FetchingKeys(worker, [reply, ..waiters])),
           )
         _, Some(discovered) -> {
           let now = monotonic_ms()
@@ -497,17 +540,18 @@ fn handle(state: State, message: Message) -> actor.Next(State, Message) {
             True, Idle -> {
               let uri = discovered.jwks_uri
               let policy = state.policy
-              in_background(
-                state.self,
-                fn() { load_keys(uri, policy) },
-                KeysLoaded,
-              )
+              let worker =
+                provider_fetch.start(
+                  state.self,
+                  fn() { load_keys(uri, policy) },
+                  KeysLoaded,
+                )
               actor.continue(
                 State(
                   ..state,
                   last_key_refresh: now,
                   attempted_kids:,
-                  fetch: FetchingKeys([reply]),
+                  fetch: FetchingKeys(worker, [reply]),
                 ),
               )
             }
@@ -519,32 +563,37 @@ fn handle(state: State, message: Message) -> actor.Next(State, Message) {
           }
         }
       }
-    KeysLoaded(result) -> {
-      let state = case result, state.discovered {
-        Ok(keys), Some(discovered) ->
-          State(..state, discovered: Some(Discovered(..discovered, keys:)))
-        _, _ -> state
+    KeysLoaded(pid, result) ->
+      case finish_background(state, pid) {
+        False -> actor.continue(state)
+        True -> {
+          let state = case result, state.discovered {
+            Ok(keys), Some(discovered) ->
+              State(..state, discovered: Some(Discovered(..discovered, keys:)))
+            _, _ -> state
+          }
+          case state.fetch {
+            FetchingKeys(_, waiters) ->
+              list.each(waiters, fn(waiter) {
+                process.send(waiter, snapshot(state))
+              })
+            _ -> Nil
+          }
+          actor.continue(State(..state, fetch: Idle))
+        }
       }
-      case state.fetch {
-        FetchingKeys(waiters) ->
-          list.each(waiters, fn(waiter) {
-            process.send(waiter, snapshot(state))
-          })
-        _ -> Nil
-      }
-      actor.continue(State(..state, fetch: Idle))
-    }
     Reload ->
       case state.fetch {
         Idle -> {
           let issuer = state.issuer
           let policy = state.policy
-          in_background(
-            state.self,
-            fn() { discover(issuer, policy, background_deadline(policy)) },
-            Reloaded,
-          )
-          actor.continue(State(..state, fetch: Reloading))
+          let worker =
+            provider_fetch.start(
+              state.self,
+              fn() { discover(issuer, policy, background_deadline(policy)) },
+              Reloaded,
+            )
+          actor.continue(State(..state, fetch: Reloading(worker)))
         }
         // A fetch is in flight; try again shortly.
         _ -> {
@@ -552,18 +601,22 @@ fn handle(state: State, message: Message) -> actor.Next(State, Message) {
           actor.continue(state)
         }
       }
-    Reloaded(result) -> {
-      let state = case result {
-        Ok(discovered) -> State(..state, discovered: Some(discovered))
-        Error(_) -> state
+    Reloaded(pid, result) ->
+      case finish_background(state, pid) {
+        False -> actor.continue(state)
+        True -> {
+          let state = case result {
+            Ok(discovered) -> State(..state, discovered: Some(discovered))
+            Error(_) -> state
+          }
+          let ttl = case state.discovered {
+            Some(discovered) -> discovered.ttl_ms
+            None -> first_backoff_ms
+          }
+          process.send_after(state.self, ttl, Reload)
+          actor.continue(State(..state, fetch: Idle))
+        }
       }
-      let ttl = case state.discovered {
-        Some(discovered) -> discovered.ttl_ms
-        None -> first_backoff_ms
-      }
-      process.send_after(state.self, ttl, Reload)
-      actor.continue(State(..state, fetch: Idle))
-    }
   }
 }
 

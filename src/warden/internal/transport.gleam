@@ -158,6 +158,11 @@ pub fn new_pool() -> Pool {
   Pool(process.new_name("warden_http_pool"))
 }
 
+/// The current owned pool process, for joining an old client generation.
+pub fn pool_process(pool: Pool) -> Result(process.Pid, Nil) {
+  process.named(pool.name)
+}
+
 /// The supervisor child that owns the pool's HTTP Gun client.
 pub fn pool_child(
   policy: Policy,

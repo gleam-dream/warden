@@ -2,11 +2,14 @@
 //// worker loss and restart, key rotation, bounded pending logins, atom and
 //// process growth.
 
+import exception
+import gleam/erlang/atom
 import gleam/erlang/process
 import gleam/http/request
 import gleam/http/response
 import gleam/list
 import gleam/option.{None, Some}
+import gleam/otp/actor
 import gleam/otp/static_supervisor as supervisor
 import gleam/string
 import gleam/time/duration
@@ -32,6 +35,23 @@ fn can_begin(client: warden.Client) -> Bool {
     Ok(_) -> True
     Error(_) -> False
   }
+}
+
+fn with_supervised(client: warden.Client, run: fn() -> a) -> a {
+  let assert Ok(actor.Started(pid: parent, ..)) =
+    supervisor.new(supervisor.OneForOne)
+    |> supervisor.add(warden.supervised(client))
+    |> supervisor.start
+  use <- exception.defer(fn() {
+    let monitor = process.monitor(parent)
+    process.unlink(parent)
+    process.send_abnormal_exit(parent, atom.create("shutdown"))
+    let assert Ok(_) =
+      process.new_selector()
+      |> process.select_specific_monitor(monitor, fn(down) { down })
+      |> process.selector_receive(5000)
+  })
+  run()
 }
 
 pub fn provider_worker_crash_is_typed_and_recovers_test() {
@@ -66,23 +86,18 @@ pub fn supervised_client_discovers_in_the_background_test() {
     )
     |> config.with_destinations(config.AllowLoopbackForTesting)
   let assert Ok(client) = warden.new(unreachable)
-  let assert Ok(_) =
-    supervisor.new(supervisor.OneForOne)
-    |> supervisor.add(warden.supervised(client))
-    |> supervisor.start
-  assert warden.begin_login(client, browser(), warden.default_login())
-    == Error(warden.LoginProviderUnavailable(warden.ProviderNotReady))
-  warden.stop(client)
+  with_supervised(client, fn() {
+    assert warden.begin_login(client, browser(), warden.default_login())
+      == Error(warden.LoginProviderUnavailable(warden.ProviderNotReady))
+  })
   // A reachable provider: ready shortly after the child started.
   let provider = support.provider_start(support.Standard)
   let assert Ok(client) = warden.new(settings(provider))
-  let assert Ok(_) =
-    supervisor.new(supervisor.OneForOne)
-    |> supervisor.add(warden.supervised(client))
-    |> supervisor.start
-  wait_until(fn() { can_begin(client) }, 100)
-  let _ = logged_in(provider, client)
-  warden.stop(client)
+  with_supervised(client, fn() {
+    wait_until(fn() { can_begin(client) }, 100)
+    let _ = logged_in(provider, client)
+    Nil
+  })
   support.provider_stop(provider)
 }
 
@@ -91,10 +106,8 @@ pub fn supervised_client_discovers_in_the_background_test() {
 pub fn the_client_survives_a_restart_of_its_tree_test() {
   let provider = support.provider_start(support.Standard)
   let assert Ok(client) = warden.new(settings(provider))
-  let assert Ok(_) =
-    supervisor.new(supervisor.OneForOne)
-    |> supervisor.add(warden.supervised(client))
-    |> supervisor.start
+  use <- exception.defer(fn() { support.provider_stop(provider) })
+  use <- with_supervised(client)
   wait_until(fn() { can_begin(client) }, 100)
   let assert Ok(first) = process.named(client.names.supervisor)
   process.kill(first)
@@ -109,8 +122,7 @@ pub fn the_client_survives_a_restart_of_its_tree_test() {
   )
   wait_until(fn() { can_begin(client) }, 100)
   let _ = logged_in(provider, client)
-  warden.stop(client)
-  support.provider_stop(provider)
+  Nil
 }
 
 pub fn a_started_client_cannot_start_twice_test() {

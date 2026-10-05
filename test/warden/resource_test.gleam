@@ -209,7 +209,7 @@ pub fn keys_unavailable_is_not_a_rejection_test() {
       |> process.selector_receive(5000)
     assert process.named(client.names.supervisor) == Error(Nil)
   })
-  // Discovery runs unlinked; settle its first attempt before stopping its owner.
+  // Settle the observed discovery attempt before stopping its owning tree.
   let assert Ok(worker) = process.receive(discovery, 5000)
   let monitor = process.monitor(worker)
   let assert Ok(_) =
