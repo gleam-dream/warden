@@ -12,7 +12,7 @@
 
 -export([
     start/0, start/1, stop/1, issuer/1, issue_code/3, script/3, token_requests/1,
-    metadata/2, refresh_tokens/1, set_claims/2, sign/2, key/1, rotate_key/1
+    metadata/2, refresh_tokens/1, set_claims/2, set_introspection_expiry/2, sign/2, key/1, rotate_key/1
 ]).
 
 -define(CLIENT, <<"warden-rp">>).
@@ -50,6 +50,11 @@ metadata(#{table := Table}, Overrides) ->
 %% Extra or replacement ID-token claims for every issued ID token.
 set_claims(#{table := Table}, Claims) ->
     ets:insert(Table, {claims, Claims}),
+    nil.
+
+%% Set the active-token response's expiry independently of request time.
+set_introspection_expiry(#{table := Table}, ExpiresAt) ->
+    ets:insert(Table, {introspection_expiry, ExpiresAt}),
     nil.
 
 %% Register an authorization code bound to the transaction's nonce.
@@ -162,11 +167,15 @@ handle(Table, #{path := <<"/userinfo">>}) ->
         [{_, {sub, Sub}}] -> json(200, #{<<"sub">> => Sub});
         [{_, {delay, Ms}}] -> {delay, Ms, Default}
     end;
-handle(_Table, #{path := <<"/introspect">>, body := Body}) ->
+handle(Table, #{path := <<"/introspect">>, body := Body}) ->
+    ExpiresAt = case ets:lookup(Table, introspection_expiry) of
+        [{_, Fixed}] -> Fixed;
+        [] -> erlang:system_time(second) + 60
+    end,
     case maps:from_list(uri_string:dissect_query(Body)) of
         #{<<"token">> := <<"active-token">>} ->
             json(200, #{<<"active">> => true, <<"client_id">> => ?CLIENT, <<"sub">> => <<"subject-1">>,
-                        <<"scope">> => <<"openid email">>, <<"exp">> => erlang:system_time(second) + 60,
+                        <<"scope">> => <<"openid email">>, <<"exp">> => ExpiresAt,
                         <<"token_type">> => <<"Bearer">>, <<"department">> => <<"platform">>});
         _ ->
             json(200, #{<<"active">> => false})

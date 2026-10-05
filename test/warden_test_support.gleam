@@ -99,6 +99,10 @@ pub fn issue_code(provider: Provider, code: String, nonce: String) -> Nil
 @external(erlang, "warden_test_provider", "token_requests")
 pub fn token_requests(provider: Provider) -> Int
 
+/// Fix the introspection response's expiry for exact clock-boundary tests.
+@external(erlang, "warden_test_provider", "set_introspection_expiry")
+pub fn set_introspection_expiry(provider: Provider, expires_at: Int) -> Nil
+
 @external(erlang, "warden_test_provider", "set_claims")
 pub fn set_claims(provider: Provider, claims: Dict(String, String)) -> Nil
 

@@ -395,14 +395,16 @@ pub fn introspection_distinguishes_inactive_from_failure_test() {
 }
 
 /// SMCP-4: an active answer whose `exp` has passed is inactive, with no
-/// clock tolerance (the provider says `exp` is 60 s ahead; Warden's clock
-/// runs 60 s later).
+/// clock tolerance. Both sides use one fixed expiry, independent of
+/// startup latency and the wall-clock second in which a request arrives.
 pub fn introspection_checks_exp_strictly_test() {
   let provider = support.provider_start(support.Standard)
-  let clock = support.clock_new(support.now_seconds() + 60)
+  let expires_at = 2_000_000_000
+  support.set_introspection_expiry(provider, expires_at)
+  let clock = support.clock_new(expires_at)
   let client = start(settings(provider) |> with_clock(clock))
   assert warden.introspect(client, "active-token") == Ok(warden.InactiveToken)
-  support.clock_set(clock, support.now_seconds() + 50)
+  support.clock_set(clock, expires_at - 1)
   let assert Ok(warden.ActiveToken(_)) =
     warden.introspect(client, "active-token")
   warden.stop(client)
