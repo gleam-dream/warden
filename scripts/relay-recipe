@@ -30,6 +30,7 @@ if [ "$README_CODE" != "$DOC_CODE" ]; then
   rm -rf "$TMP"
   exit 1
 fi
+mkdir -p "$ROOT/relay_consumer/src"
 printf '%s\n' "$README_CODE" >"$OUT"
 cd "$ROOT/relay_consumer"
 gleam format --check src test

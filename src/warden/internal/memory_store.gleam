@@ -154,24 +154,28 @@ fn full(state: State) -> Bool {
 /// Drop expired records from the oldest end until the store has room.
 fn make_room(state: State) -> State {
   let now = timestamp.from_unix_seconds(state.clock())
-  case full(state), fifo.pop(state.order) {
-    True, Ok(#(#(expires_at, key), rest)) ->
-      case not_after(expires_at, now) {
-        False -> state
-        True -> {
-          // Delete only if the record was not rewritten with a later expiry.
-          let records = case dict.get(state.records, key) {
-            Ok(record) ->
-              case not_after(record.expires_at, now) {
-                True -> dict.delete(state.records, key)
-                False -> state.records
+  case full(state) {
+    False -> state
+    True ->
+      case fifo.pop(state.order) {
+        Ok(#(#(expires_at, key), rest)) ->
+          case not_after(expires_at, now) {
+            False -> state
+            True -> {
+              // Delete only if the record was not rewritten with a later expiry.
+              let records = case dict.get(state.records, key) {
+                Ok(record) ->
+                  case not_after(record.expires_at, now) {
+                    True -> dict.delete(state.records, key)
+                    False -> state.records
+                  }
+                Error(Nil) -> state.records
               }
-            Error(Nil) -> state.records
+              make_room(State(..state, records:, order: rest))
+            }
           }
-          make_room(State(..state, records:, order: rest))
-        }
+        Error(Nil) -> state
       }
-    _, _ -> state
   }
 }
 
