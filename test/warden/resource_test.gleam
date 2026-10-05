@@ -1,13 +1,19 @@
 //// Local access-token validation (RFC 9068) against the public test
 //// provider: every check fails closed.
 
+import exception
 import gleam/dynamic/decode
+import gleam/erlang/atom
+import gleam/erlang/process
 import gleam/option.{None, Some}
+import gleam/otp/actor
 import gleam/otp/static_supervisor as supervisor
 import gleam/time/duration
+import sinal
 import warden
 import warden/config
 import warden/resource
+import warden/telemetry
 import warden/testing
 
 const audience = "https://api.example.test"
@@ -175,10 +181,41 @@ pub fn keys_unavailable_is_not_a_rejection_test() {
       config.resource_server(issuer: "https://localhost:1")
       |> config.with_destinations(config.AllowLoopbackForTesting),
     )
-  let assert Ok(_) =
+  let discovery = process.new_subject()
+  let observer =
+    sinal.observe(telemetry.http_request(), fn(_, event) {
+      case event.path, event.outcome {
+        "/.well-known/openid-configuration",
+          telemetry.Failed(telemetry.NotSent, telemetry.ConnectionRefused)
+        -> process.send(discovery, process.self())
+        _, _ -> Nil
+      }
+    })
+  use <- exception.defer(fn() {
+    let assert Ok(Nil) = sinal.detach(observer)
+  })
+  let assert Ok(actor.Started(pid: supervisor, ..)) =
     supervisor.new(supervisor.OneForOne)
     |> supervisor.add(warden.supervised(client))
     |> supervisor.start
+  // Stop the owning supervisor; stopping only its client would restart it.
+  use <- exception.defer(fn() {
+    let monitor = process.monitor(supervisor)
+    process.unlink(supervisor)
+    process.send_abnormal_exit(supervisor, atom.create("shutdown"))
+    let assert Ok(_) =
+      process.new_selector()
+      |> process.select_specific_monitor(monitor, fn(down) { down })
+      |> process.selector_receive(5000)
+    assert process.named(client.names.supervisor) == Error(Nil)
+  })
+  // Discovery runs unlinked; settle its first attempt before stopping its owner.
+  let assert Ok(worker) = process.receive(discovery, 5000)
+  let monitor = process.monitor(worker)
+  let assert Ok(_) =
+    process.new_selector()
+    |> process.select_specific_monitor(monitor, fn(down) { down })
+    |> process.selector_receive(5000)
   let validator = resource.new(client, audience:)
   let assert Error(error) = resource.verify(validator, token)
   assert error == resource.KeysUnavailable(warden.ProviderNotReady)
