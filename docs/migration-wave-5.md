@@ -120,3 +120,11 @@ Found with `grep` over `/code/gleam-dream/*/src`, `*/test`, `*/integrations`,
 ## Round 9: validation maintenance
 
 The in-memory store now checks capacity before inspecting its FIFO, avoiding unnecessary queue work while there is room. Eviction and expiry semantics stay unchanged. The Relay recipe gate creates its generated source directory on a clean checkout. No public signatures or dependent application code change; the existing compiled verifier recipe remains the composition boundary.
+
+
+The review validation pass also fixes the introspection-expiry fixture. Before,
+it froze the client clock before startup but calculated the provider's expiry
+when the request arrived, so a wall-clock second boundary changed the expected
+result. The fixture now supplies one fixed expiry and tests the client exactly
+at that expiry and one second before it. No production behavior, public API or
+dependent application changes.

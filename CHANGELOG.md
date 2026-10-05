@@ -8,6 +8,10 @@ and the evidence for each wave in [docs/PROGRESS.md](docs/PROGRESS.md).
 
 ## Unreleased
 
+- Make the strict introspection-expiry test deterministic: the scripted
+  provider and client clock use one fixed expiry, tested exactly at expiry
+  and one second before it. Production expiry checks are unchanged.
+
 - Round 9: avoid unnecessary FIFO work in the in-memory store; create the generated Relay recipe source directory on clean checkouts.
 
 ### Added (wave 5; see docs/migration-wave-5.md)
