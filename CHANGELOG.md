@@ -8,6 +8,8 @@ and the evidence for each wave in [docs/PROGRESS.md](docs/PROGRESS.md).
 
 ## Unreleased
 
+- Round 9: avoid unnecessary FIFO work in the in-memory store; create the generated Relay recipe source directory on clean checkouts.
+
 ### Added (wave 5; see docs/migration-wave-5.md)
 
 - `resource.WrongAudience`, an `ErrorKind` for a token that passed every
