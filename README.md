@@ -118,6 +118,17 @@ client starts without waiting for the provider and discovers it in the
 background (retrying from 1 s to 60 s); until then operations answer
 `ProviderNotReady`. A supervised client is stopped through its parent.
 
+Each cache owns at most one asynchronous discovery, metadata reload or key
+refresh. Cached reads keep using the last accepted snapshot while it runs.
+A cache restart cannot accept an older cache's completion. A whole-tree
+restart joins old child processes before reusing their names, bounded by
+`config.with_startup_timeout`. Manual startup shares that deadline with
+discovery and the first keys. Cache exit terminates its worker without
+waiting for the provider deadline or an application telemetry handler.
+Shutdown requests supervisor exit and waits up to five seconds; returning
+after that bound does not prove shutdown. Worker cancellation follows the
+cache's exit notification.
+
 ## Durable sessions and several nodes
 
 By default sessions and pending logins live in memory: a restart signs
@@ -313,43 +324,43 @@ local JWT validator accepts it until it expires.
 
 ## Defaults
 
-| Operation                                                | Default                                                                                        | Setter                                                         |
-| -------------------------------------------------------- | ---------------------------------------------------------------------------------------------- | -------------------------------------------------------------- |
-| `start`: discovery and first key set                     | 15 s                                                                                           | `config.with_startup_timeout`                                  |
-| `supervised`: background discovery                       | retries from 1 s to 60 s                                                                       |                                                                |
-| provider request                                         | 10 s; HTTP Gun's own 5 s connect, 5 s pool checkout, 30 s idle read, 60 s idle connection      | `config.with_request_timeout`                                  |
-| provider response body                                   | 1 MiB; head 16 KiB, 100 headers; no redirects                                                  | `config.with_max_response_bytes`                               |
-| request body Warden sends                                | 64 KiB                                                                                         |                                                                |
-| bearer token introspected or validated                   | 8 KiB                                                                                          |                                                                |
-| store call                                               | 5 s                                                                                            | `config.with_store_timeout`                                    |
-| provider-cache call                                      | request timeout + 1 s                                                                          |                                                                |
-| `complete_login`, end to end                             | 30 s                                                                                           | `config.with_login_timeout`                                    |
-| pending login                                            | 10 min                                                                                         | `config.with_login_lifetime`                                   |
-| records in the built-in login store                      | 100 000                                                                                        | `config.with_max_pending_logins`                               |
-| callback input                                           | 16 KiB total, 4 KiB per value                                                                  |                                                                |
-| login option values                                      | 2 KiB each                                                                                     |                                                                |
-| session                                                  | 12 h absolute, 1 h idle                                                                        | `config.with_session_lifetime`                                 |
-| sessions per identity                                    | not bounded (decision D14)                                                                     |                                                                |
-| refresh margin before expiry                             | 30 s                                                                                           | `config.with_refresh_margin`                                   |
-| wait for another request's refresh                       | 5 s                                                                                            | `config.with_refresh_wait`                                     |
-| refresh lease (a lost refresher quarantines after it)    | request + 2 × store timeout + 1 s                                                              |                                                                |
-| resend after a possible send                             | never (authorization code, refresh token)                                                      |                                                                |
-| logout revocation                                        | refresh token revoked (RFC 7009)                                                               | `LogoutOptions(revocation:)`                                   |
-| install-recovery horizon, logout tombstones              | the login lifetime                                                                             |                                                                |
-| expired-record sweep                                     | every 60 s                                                                                     |                                                                |
-| key cache                                                | `Cache-Control` clamped to 60 s–24 h, else 1 h                                                 |                                                                |
-| unknown-`kid` key refetch                                | at once per new kid (64 remembered), else once a second                                        |                                                                |
-| supervisor restarts                                      | 10 in 60 s                                                                                     |                                                                |
-| clock tolerance (`iat`, `nbf`, `auth_time`; never `exp`) | 5 s                                                                                            | `config.with_clock_tolerance`                                  |
-| ID-token and access-token algorithms                     | RS256, PS256, ES256, EdDSA; `none` and HMAC unrepresentable                                    | `config.with_signing_algorithms`, `resource.with_algorithms`   |
-| PKCE                                                     | advertised S256 required                                                                       | `config.with_pkce_advertisement`                               |
-| RFC 9207 `iss`                                           | required when advertised                                                                       | `config.with_issuer_parameter`                                 |
-| destinations, TLS trust                                  | public addresses, system trust                                                                 | `config.with_destinations`, `with_allowed_hosts`, `with_trust` |
-| ID-token audience                                        | exactly the client                                                                             |                                                                |
-| access-token audience and type (`warden/resource`)       | exactly the configured audience; `typ` `at+jwt`                                                | `resource.with_audience_policy`, `allow_any_token_type`        |
-| binding cookie                                           | `__Host-warden_binding`, `Secure`, `HttpOnly`, `Path=/`, `SameSite=Lax` (`None` for form post) |                                                                |
-| session and login storage                                | in memory                                                                                      | `config.with_custody_store`, `with_transaction_store`          |
-| `client_credentials`                                     | not cached: one token request per call                                                         |                                                                |
+| Operation                                                   | Default                                                                                        | Setter                                                         |
+| ----------------------------------------------------------- | ---------------------------------------------------------------------------------------------- | -------------------------------------------------------------- |
+| `start`: discovery, first keys and previous-process cleanup | 15 s                                                                                           | `config.with_startup_timeout`                                  |
+| `supervised`: background discovery                          | retries from 1 s to 60 s                                                                       |                                                                |
+| provider request                                            | 10 s; HTTP Gun's own 5 s connect, 5 s pool checkout, 30 s idle read, 60 s idle connection      | `config.with_request_timeout`                                  |
+| provider response body                                      | 1 MiB; head 16 KiB, 100 headers; no redirects                                                  | `config.with_max_response_bytes`                               |
+| request body Warden sends                                   | 64 KiB                                                                                         |                                                                |
+| bearer token introspected or validated                      | 8 KiB                                                                                          |                                                                |
+| store call                                                  | 5 s                                                                                            | `config.with_store_timeout`                                    |
+| provider-cache call                                         | request timeout + 1 s                                                                          |                                                                |
+| `complete_login`, end to end                                | 30 s                                                                                           | `config.with_login_timeout`                                    |
+| pending login                                               | 10 min                                                                                         | `config.with_login_lifetime`                                   |
+| records in the built-in login store                         | 100 000                                                                                        | `config.with_max_pending_logins`                               |
+| callback input                                              | 16 KiB total, 4 KiB per value                                                                  |                                                                |
+| login option values                                         | 2 KiB each                                                                                     |                                                                |
+| session                                                     | 12 h absolute, 1 h idle                                                                        | `config.with_session_lifetime`                                 |
+| sessions per identity                                       | not bounded (decision D14)                                                                     |                                                                |
+| refresh margin before expiry                                | 30 s                                                                                           | `config.with_refresh_margin`                                   |
+| wait for another request's refresh                          | 5 s                                                                                            | `config.with_refresh_wait`                                     |
+| refresh lease (a lost refresher quarantines after it)       | request + 2 × store timeout + 1 s                                                              |                                                                |
+| resend after a possible send                                | never (authorization code, refresh token)                                                      |                                                                |
+| logout revocation                                           | refresh token revoked (RFC 7009)                                                               | `LogoutOptions(revocation:)`                                   |
+| install-recovery horizon, logout tombstones                 | the login lifetime                                                                             |                                                                |
+| expired-record sweep                                        | every 60 s                                                                                     |                                                                |
+| key cache                                                   | `Cache-Control` clamped to 60 s–24 h, else 1 h                                                 |                                                                |
+| unknown-`kid` key refetch                                   | at once per new kid (64 remembered), else once a second                                        |                                                                |
+| supervisor restarts                                         | 10 in 60 s                                                                                     |                                                                |
+| clock tolerance (`iat`, `nbf`, `auth_time`; never `exp`)    | 5 s                                                                                            | `config.with_clock_tolerance`                                  |
+| ID-token and access-token algorithms                        | RS256, PS256, ES256, EdDSA; `none` and HMAC unrepresentable                                    | `config.with_signing_algorithms`, `resource.with_algorithms`   |
+| PKCE                                                        | advertised S256 required                                                                       | `config.with_pkce_advertisement`                               |
+| RFC 9207 `iss`                                              | required when advertised                                                                       | `config.with_issuer_parameter`                                 |
+| destinations, TLS trust                                     | public addresses, system trust                                                                 | `config.with_destinations`, `with_allowed_hosts`, `with_trust` |
+| ID-token audience                                           | exactly the client                                                                             |                                                                |
+| access-token audience and type (`warden/resource`)          | exactly the configured audience; `typ` `at+jwt`                                                | `resource.with_audience_policy`, `allow_any_token_type`        |
+| binding cookie                                              | `__Host-warden_binding`, `Secure`, `HttpOnly`, `Path=/`, `SameSite=Lax` (`None` for form post) |                                                                |
+| session and login storage                                   | in memory                                                                                      | `config.with_custody_store`, `with_transaction_store`          |
+| `client_credentials`                                        | not cached: one token request per call                                                         |                                                                |
 
 ## Modules
 

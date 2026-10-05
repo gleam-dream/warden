@@ -38,7 +38,7 @@
 //// | destinations | public addresses only | `with_destinations`, `with_allowed_hosts` |
 //// | provider request | 10 s | `with_request_timeout` |
 //// | provider response body | 1 MiB | `with_max_response_bytes` |
-//// | `warden.start` discovery and keys | 15 s | `with_startup_timeout` |
+//// | startup discovery, keys and previous-process cleanup | 15 s | `with_startup_timeout` |
 //// | store call | 5 s | `with_store_timeout` |
 //// | `complete_login`, end to end | 30 s | `with_login_timeout` |
 //// | pending login | 10 min | `with_login_lifetime` |
@@ -454,7 +454,9 @@ pub fn with_max_response_bytes(config: Config, bytes: Int) -> Config {
   Settings(..config, max_response_bytes: bytes)
 }
 
-/// How long `warden.start` waits for discovery and the first key set.
+/// One deadline for `warden.start` discovery, first keys and joining any
+/// previous client processes. Supervised startup uses the same bound when
+/// joining a previous tree; its background discovery retries independently.
 /// Between 1 ms and 10 minutes; default 15 s.
 pub fn with_startup_timeout(config: Config, timeout: Duration) -> Config {
   Settings(..config, startup_timeout_ms: duration.to_milliseconds(timeout))

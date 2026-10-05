@@ -3,6 +3,83 @@
 This file is the durable progress record for the Warden program. Read it
 before relying on conversation history. Closed-wave entries are append-only.
 
+## Round 9: provider fetch ownership (2026-10-05)
+
+- Discovery, reload and key refresh now belong to the specific cache process
+  that started them. A per-fetch guardian cancels ownerless work; the cache
+  observes lost workers without losing its accepted snapshot or remaining busy.
+  No public API, package dependency, retry cadence or timeout changed.
+- Four behavior regressions failed against the original production code before
+  the fix. Nineteen focused lifecycle tests now pass, including public token
+  rejection after key rotation/restart, normal exits, stalled HTTPS, public
+  `stop`, queued completion after shutdown, discovery/reload recovery, old
+  completion/DOWN replay and drained
+  process bookkeeping. Test fixture synchronization uses scoped telemetry
+  barriers and bounded readiness calls rather than race-masking sleeps.
+- The final `nix develop --command scripts/check` gate passed: 205 core
+  tests, 18 negative compilation fixtures plus their positive control,
+  13 external-consumer tests and six compiled Relay-recipe tests.
+- The queued-completion regression also fails against a temporary BEAM
+  mutation that restores named completion routing: the guardian panics when
+  sending to the removed name. Current process-specific routing exits normally.
+- Final-gate validation exposed a second ownership race: hard-killing the client
+  supervisor could let its parent restart before old children released their
+  names. A controlled barrier on the real HTTP pool reproduced immediate
+  restart-budget exhaustion. Startup now joins all previous owned child PIDs
+  under the existing absolute startup deadline, with no name takeover or
+  retry inflation. Two new regressions cover successful release and bounded
+  `StartupTimedOut`; the operational fixtures now stop their owning parent.
+  Before the fix, the restart regression failed its parent-alive assertion;
+  the deadline regression was cancelled when public startup crashed after a
+  named-child start failure. After the fix both return through their expected
+  behavior paths, including the typed timeout.
+- The restart join adds at most five temporary monitors only during startup,
+  removed on success or expiry. It does not enter the measured cache/fetch
+  path. A held old child can block the parent supervisor's startup callback
+  and management handling up to the configured startup bound (15 s default);
+  other running clients' request actors remain independent. Nineteen lifecycle
+  and eleven operational tests pass together.
+- A guardian adds one process, three lifecycle monitors, one link and a result
+  forwarding hop per active fetch. Idle caches add no process or monitor; their
+  selector gains a completion channel and monitor-message handling. This is
+  local to each cache and does not serialize independent clients.
+- The extra result copy scales with the decoded key-set size. The existing
+  HTTP response bound remains in force, but this small-fixture benchmark does
+  not measure worst-case allocation or latency for a large JWKS.
+- `stop` requests supervisor shutdown and waits up to five seconds for exit.
+  Returning after that bound does not prove shutdown or join every fetch
+  worker; owner exit triggers prompt cancellation independently of a
+  provider response or a blocked telemetry observer. Cancellation cannot undo
+  an HTTP request the provider has already received.
+- The local microbenchmark used OTP 28 with four online schedulers and no
+  concurrent stress gate. The baseline revision was `99531f3`. Three warmed
+  runs measured 3,000 token validations
+  per client and 100 sequential TLS key refreshes. The medians below are
+  observations on one machine, not a deployment capacity guarantee.
+
+| Measurement                                      | Before         | After          |
+| ------------------------------------------------ | -------------- | -------------- |
+| One-client token validations/s                   | 2,568          | 2,528          |
+| Four concurrent clients, aggregate validations/s | 9,761          | 9,737          |
+| 100 sequential TLS key refreshes                 | 5.232 s        | 5.223 s        |
+| One-cache snapshot, paired median                | 20.259 µs/read | 20.230 µs/read |
+| Four-cache interleaved snapshots, paired median  | 20.581 µs/read | 20.798 µs/read |
+
+- Snapshot isolation used five alternating before/after pairs in one VM, with
+  1,000 warmup reads and 20,000 measured reads per cache. One-cache ranges were
+  17.057–20.337 µs before and 19.898–20.346 µs after; four-cache ranges were
+  20.324–20.759 µs before and 20.587–21.617 µs after. The four-cache median
+  increased by 0.217 µs (1.06%); token-validation and refresh ranges overlapped.
+- After explicit garbage collection, cache process memory stayed within
+  5,768–8,784 bytes in both the before and after paired samples. Heap allocation
+  bins vary: this does not establish a memory improvement. Idle and burst-end caches had no active
+  lifecycle monitors or queued messages.
+- The benchmark entry points are `benchmark/0` and `snapshot_benchmark/0` in
+  `test/warden_fetch_ownership_test.erl`; they are not performance thresholds
+  in the correctness gate. Paired runs loaded baseline and current provider
+  BEAM code between fully stopped client fixtures in the same VM.
+- Migration and lifecycle details: [Round 9](migration-round-9.md).
+
 ## Program contract
 
 - **Target:** the accepted design in `gleam-dream/oversight` —

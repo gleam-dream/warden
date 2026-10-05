@@ -8,6 +8,20 @@ and the evidence for each wave in [docs/PROGRESS.md](docs/PROGRESS.md).
 
 ## Unreleased
 
+- Join a previous client tree's named child processes before reusing their
+  names after abrupt supervisor death. Discovery and cleanup share the
+  configured startup deadline; expiry returns `StartupTimedOut`. This avoids
+  spending the parent supervisor's restart budget on names still being released.
+- Stop the owning parents of supervised operational test fixtures, so test
+  cleanup does not restart the client it intended to stop.
+
+- Bind provider discovery, metadata reload and signing-key refresh to the
+  cache process that started them. Old completions cannot restore removed
+  signing keys after cache restart. Owner exit terminates blocked fetches;
+  worker loss releases refresh callers and retains the last good snapshot.
+  Public APIs, timeout settings, retry cadence and dependencies are unchanged.
+  See [Round 9 migration notes](docs/migration-round-9.md).
+
 - Stop the unavailable-provider test fixture’s owning supervisor after its
   initial discovery attempt settles. This removes background retries that
   could enter later telemetry tests; correlation assertions and production

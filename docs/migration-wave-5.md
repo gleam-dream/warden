@@ -121,7 +121,6 @@ Found with `grep` over `/code/gleam-dream/*/src`, `*/test`, `*/integrations`,
 
 The in-memory store now checks capacity before inspecting its FIFO, avoiding unnecessary queue work while there is room. Eviction and expiry semantics stay unchanged. The Relay recipe gate creates its generated source directory on a clean checkout. No public signatures or dependent application code change; the existing compiled verifier recipe remains the composition boundary.
 
-
 The review validation pass also fixes the introspection-expiry fixture. Before,
 it froze the client clock before startup but calculated the provider's expiry
 when the request arrived, so a wall-clock second boundary changed the expected
@@ -135,6 +134,8 @@ lifecycle. Before, the resource test left its supervising tree running against
 After, the fixture waits for its initial discovery worker to exit, stops the
 owning supervisor, and checks that the client supervisor has exited. The exact
 session-request and correlation assertions remain unchanged. No public API or
-dependent application migration is required. Discovery workers run unlinked in
-production; stopping their owner does not itself wait for an in-flight request,
-which remains bounded by the transport deadline.
+dependent application migration is required. At that point, discovery workers ran
+unlinked and could survive owner exit until their transport deadline. The
+subsequent [provider fetch ownership fix](migration-round-9.md) binds each
+fetch to its cache process and terminates ownerless work without waiting for
+that deadline. The public API remains unchanged.
