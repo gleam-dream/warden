@@ -8,6 +8,11 @@ and the evidence for each wave in [docs/PROGRESS.md](docs/PROGRESS.md).
 
 ## Unreleased
 
+- Stop the unavailable-provider test fixture’s owning supervisor after its
+  initial discovery attempt settles. This removes background retries that
+  could enter later telemetry tests; correlation assertions and production
+  discovery behavior are unchanged.
+
 - Make the strict introspection-expiry test deterministic: the scripted
   provider and client clock use one fixed expiry, tested exactly at expiry
   and one second before it. Production expiry checks are unchanged.

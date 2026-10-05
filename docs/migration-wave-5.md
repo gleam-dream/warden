@@ -128,3 +128,13 @@ when the request arrived, so a wall-clock second boundary changed the expected
 result. The fixture now supplies one fixed expiry and tests the client exactly
 at that expiry and one second before it. No production behavior, public API or
 dependent application changes.
+
+The typed-composition validation pass fixes the unavailable-provider fixture’s
+lifecycle. Before, the resource test left its supervising tree running against
+`https://localhost:1`; later telemetry tests could receive its discovery retries.
+After, the fixture waits for its initial discovery worker to exit, stops the
+owning supervisor, and checks that the client supervisor has exited. The exact
+session-request and correlation assertions remain unchanged. No public API or
+dependent application migration is required. Discovery workers run unlinked in
+production; stopping their owner does not itself wait for an in-flight request,
+which remains bounded by the transport deadline.
