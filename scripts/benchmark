@@ -1,0 +1,11 @@
+#!/bin/sh
+# Observational cached-validation and snapshot measurements; no latency limits.
+set -eu
+ROOT=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
+cd "$ROOT"
+gleam build --warnings-as-errors
+scripts/erlang-check
+mkdir -p build/benchmark
+{ git rev-parse HEAD; gleam --version; erl +S 4 -noshell -eval 'io:format("OTP=~s schedulers=~p~n", [erlang:system_info(otp_release), erlang:system_info(schedulers_online)]), halt().'; uname -a; } > build/benchmark/environment.txt
+erl +S 4 -noshell -pa build/dev/erlang/*/ebin -eval 'warden_fetch_ownership_test:benchmark(), warden_fetch_ownership_test:snapshot_benchmark(), halt().' > build/benchmark/observations.txt 2>&1
+cat build/benchmark/observations.txt

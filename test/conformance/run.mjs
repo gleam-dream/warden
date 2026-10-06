@@ -11,6 +11,7 @@ import { spawn } from "node:child_process";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { selectPlans, selectModules, verdict } from "./verdict.mjs";
 
 const ROOT = path.resolve(import.meta.dirname, "../..");
 const SUITE = "https://localhost.emobix.co.uk:8443";
@@ -80,9 +81,16 @@ const PLANS = {
     logout: true,
   },
 };
-const selected = (
-  process.argv[2] ?? "basic,formpost,config,thirdparty,refresh,logout"
-).split(",");
+const selected = selectPlans(
+  process.argv[2] ?? "basic,formpost,config,thirdparty,refresh,logout",
+  Object.keys(PLANS),
+);
+const verdictPolicy = process.env.WARDEN_CONFORMANCE_POLICY ?? "strict";
+if (!["strict", "regression"].includes(verdictPolicy))
+  throw new Error("Unknown conformance verdict policy");
+const knownOutcomes = JSON.parse(
+  fs.readFileSync(new URL("./known-outcomes.json", import.meta.url), "utf8"),
+);
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -371,6 +379,7 @@ async function runModule(plan, planId, module) {
 }
 
 const summary = [];
+const expectedModules = {};
 for (const key of selected) {
   const plan = PLANS[key];
   const config = {
@@ -393,10 +402,13 @@ for (const key of selected) {
     config,
   );
   const planId = created.id;
-  const only = process.env.MODULES ? process.env.MODULES.split(",") : null;
-  const modules = created.modules
-    .map((m) => m.testModule)
-    .filter((m) => !only || only.includes(m));
+  const only =
+    process.env.MODULES !== undefined ? process.env.MODULES.split(",") : null;
+  const modules = selectModules(
+    created.modules?.map((m) => m.testModule),
+    only,
+  );
+  expectedModules[plan.name] = modules;
   for (const module of modules) {
     const row = await runModule(plan, planId, module).catch((e) => ({
       module,
@@ -419,6 +431,12 @@ for (const key of selected) {
   } catch {}
 }
 if (chrome) await chrome.close();
+const acceptance = verdict(summary, {
+  selected: selected.map((key) => PLANS[key].name),
+  policy: verdictPolicy,
+  known: knownOutcomes.known,
+  modules: expectedModules,
+});
 fs.writeFileSync(
   path.join(OUT, `summary-${selected.join("_")}.json`),
   JSON.stringify(
@@ -430,8 +448,17 @@ fs.writeFileSync(
           ? "NON-DEFAULT: AssumeS256WhenUnadvertised (public opt-in, decision D7)"
           : "default",
       summary,
+      acceptance: { ...acceptance, verdictPolicy, certification: false },
     },
     null,
     2,
   ),
 );
+
+for (const row of acceptance.expected)
+  console.log(
+    `EXPECTED NON-PASS ${row.plan} ${row.module}: ${row.result} — ${row.reason}`,
+  );
+for (const failure of acceptance.failures)
+  console.error(`CONFORMANCE FAILURE ${failure}`);
+process.exitCode = acceptance.ok ? 0 : 1;

@@ -1,0 +1,35 @@
+#!/bin/sh
+# A compiler warning must fail the exact authored-Erlang gate.
+set -eu
+ROOT=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
+WORK=$(mktemp -d)
+trap 'rm -rf "$WORK"' EXIT HUP INT TERM
+mkdir -p "$WORK/src" "$WORK/test"
+cat > "$WORK/src/warning_control.erl" <<'ERLANG'
+-module(warning_control).
+-export([ok/0]).
+ok() -> ok.
+ERLANG
+"$ROOT/scripts/erlang-check" "$WORK"
+cat > "$WORK/src/warning_control.erl" <<'ERLANG'
+-module(warning_control).
+-export([ok/0]).
+ok() -> Unused = warning, ok.
+ERLANG
+if "$ROOT/scripts/erlang-check" "$WORK" > "$WORK/diagnostic" 2>&1; then
+  echo "gate regression: Erlang warning incorrectly accepted" >&2
+  exit 1
+fi
+grep -q 'unused' "$WORK/diagnostic"
+# Exercise the actual process exit boundary as well as EUnit's pure selector.
+if (cd "$ROOT" && WARDEN_SUITE=typo gleam test) > "$WORK/unknown-suite" 2>&1; then
+  echo "gate regression: unknown suite incorrectly accepted" >&2
+  exit 1
+fi
+grep -q 'unknown_suite' "$WORK/unknown-suite"
+if (cd "$WORK" && WARDEN_SUITE=node erl -noshell -pa "$ROOT/build/dev/erlang/warden/ebin" -eval 'warden_test_runner:main().') > "$WORK/empty-suite" 2>&1; then
+  echo "gate regression: empty suite incorrectly accepted" >&2
+  exit 1
+fi
+grep -q 'empty_suite' "$WORK/empty-suite"
+node --test "$ROOT/test/conformance/verdict.test.mjs"

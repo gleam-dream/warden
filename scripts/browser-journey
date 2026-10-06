@@ -6,8 +6,8 @@ set -eu
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 PKI="$ROOT/build/test-pki"
 cd "$ROOT/consumer"
-gleam build >/dev/null
-[ -d browser/node_modules ] || (cd browser && npm ci --no-fund --no-audit >/dev/null)
+gleam build --warnings-as-errors >/dev/null
+(cd browser && npm ci --no-fund --no-audit >/dev/null)
 PIDS=""
 cleanup() { for p in $PIDS; do kill "$p" 2>/dev/null || true; done; }
 trap cleanup EXIT INT TERM

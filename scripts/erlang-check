@@ -1,0 +1,12 @@
+#!/bin/sh
+# Compile authored Erlang only; dependency and generated Erlang have other owners.
+set -eu
+ROOT=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
+PACKAGE=${1:-$ROOT}
+cd "$PACKAGE"
+PACKAGE=$(pwd)
+OUT="$PACKAGE/build/ci/erlang"
+mkdir -p "$OUT"
+find src test -type f -name '*.erl' -print | while IFS= read -r source; do
+  ERL_LIBS="$PACKAGE/build/dev/erlang" erlc -Werror -o "$OUT" "$source"
+done

@@ -1,0 +1,110 @@
+name: Provider evidence
+on:
+  push:
+    paths:
+      [
+        "src/**",
+        "test/**",
+        "consumer/**",
+        "relay_consumer/**",
+        "scripts/**",
+        ".github/**",
+        "gleam.toml",
+        "manifest.toml",
+        "flake.nix",
+        "flake.lock",
+        "sibling-revisions.txt",
+      ]
+  pull_request:
+    paths:
+      [
+        "src/**",
+        "test/**",
+        "consumer/**",
+        "relay_consumer/**",
+        "scripts/**",
+        ".github/**",
+        "gleam.toml",
+        "manifest.toml",
+        "flake.nix",
+        "flake.lock",
+        "sibling-revisions.txt",
+      ]
+  schedule:
+    - cron: "19 3 * * *"
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  providers:
+    name: Provider ${{ matrix.suite }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        suite: [node, keycloak, interop, browser]
+    defaults:
+      run:
+        working-directory: warden
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          path: warden
+          persist-credentials: false
+      - uses: ./warden/.github/actions/siblings
+        with:
+          client-id: ${{ vars.SIBLINGS_APP_CLIENT_ID }}
+          private-key: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.head.repo.fork) && secrets.SIBLINGS_APP_PRIVATE_KEY || '' }}
+          read-token: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.head.repo.fork) && secrets.SIBLINGS_READ_TOKEN || '' }}
+      - uses: cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24 # v31
+        with:
+          extra_nix_config: experimental-features = nix-command flakes
+      - name: Record source revisions
+        run: |
+          mkdir -p build/ci
+          { git rev-parse HEAD; cat sibling-revisions.txt; } > build/ci/revisions.txt
+      - name: Record browser identity
+        if: matrix.suite == 'browser'
+        run: google-chrome --version | tee build/ci/browser-version.txt
+      - name: Run disposable provider suite
+        env:
+          SUITE: ${{ matrix.suite }}
+        run: |
+          set -o pipefail
+          nix develop -c scripts/provider-check "$SUITE" 2>&1 | tee "build/ci/provider-$SUITE.log"
+      - name: Collect container diagnostics
+        if: always() && (matrix.suite == 'keycloak' || matrix.suite == 'interop' || matrix.suite == 'browser')
+        env:
+          SUITE: ${{ matrix.suite }}
+        run: |
+          docker ps -a > build/ci/containers.txt
+          docker images --digests > build/ci/images.txt
+      - name: Retain provider evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: warden-provider-${{ matrix.suite }}
+          path: |
+            warden/build/ci/
+            warden/build/browser-journey.json
+            warden/build/node-provider.log
+            warden/build/hydra-consent.log
+            warden/build/reference-*.log
+          if-no-files-found: error
+          retention-days: 14
+  provider-ci:
+    name: Provider CI
+    if: always()
+    needs: providers
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    steps:
+      - env:
+          PROVIDER_RESULT: ${{ needs.providers.result }}
+        run: test "$PROVIDER_RESULT" = success

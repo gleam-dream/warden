@@ -11,6 +11,7 @@ case "${1:-up}" in
     $COMPOSE up -d
     "$0" wait
     ;;
+  logs) $COMPOSE logs --no-color ;;
   down) $COMPOSE down -v ;;
   wait)
     i=0
@@ -22,5 +23,5 @@ case "${1:-up}" in
     done
     echo "keycloak ready: https://localhost:18443/realms/warden"
     ;;
-  *) echo "usage: $0 up|down|wait" >&2; exit 2 ;;
+  *) echo "usage: $0 up|down|wait|logs" >&2; exit 2 ;;
 esac

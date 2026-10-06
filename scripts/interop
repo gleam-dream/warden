@@ -5,6 +5,7 @@
 set -eu
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 COMPOSE="docker compose -f $ROOT/test/providers/interop/compose.yml"
+PIDFILE="$ROOT/build/hydra-consent.pid"
 case "${1:-up}" in
   up)
     "$ROOT/scripts/test-pki"
@@ -18,6 +19,13 @@ case "${1:-up}" in
     [ -f "$ROOT/test/providers/interop/hydra-setup.sh" ] && sh "$ROOT/test/providers/interop/hydra-setup.sh"
     echo "interop providers ready"
     ;;
-  down) $COMPOSE down -v ;;
-  *) echo "usage: $0 up|down" >&2; exit 2 ;;
+  logs) $COMPOSE logs --no-color ;;
+  down)
+    if [ -f "$PIDFILE" ]; then
+      kill "$(cat "$PIDFILE")" 2>/dev/null || true
+      rm -f "$PIDFILE"
+    fi
+    $COMPOSE down -v
+    ;;
+  *) echo "usage: $0 up|down|logs" >&2; exit 2 ;;
 esac

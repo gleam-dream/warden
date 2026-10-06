@@ -1,0 +1,44 @@
+{
+  "suite": "release-v5.3.1",
+  "source": "docs/adr/0008-oracles-and-evidence-limits.md",
+  "known": {
+    "oidcc-client-basic-certification-test-plan": {
+      "oidcc-client-test-idtoken-sig-none": {
+        "status": "FINISHED",
+        "result": "SKIPPED",
+        "reason": "Warden refuses unsigned tokens. This retained skip does not prove the independent unsigned-token requirement."
+      }
+    },
+    "oidcc-client-formpost-basic-certification-test-plan": {
+      "oidcc-client-test-idtoken-sig-none": {
+        "status": "FINISHED",
+        "result": "SKIPPED",
+        "reason": "Warden refuses unsigned tokens. This retained skip does not prove the independent unsigned-token requirement."
+      }
+    },
+    "oidcc-client-config-certification-test-plan": {
+      "oidcc-client-test-idtoken-sig-none": {
+        "status": "FINISHED",
+        "result": "SKIPPED",
+        "reason": "Warden refuses unsigned tokens. This retained skip does not prove the independent unsigned-token requirement."
+      }
+    },
+    "oidcc-client-rp-initiated-logout-rp-basic": {
+      "oidcc-client-test-rp-init-logout": {
+        "status": "FINISHED",
+        "result": "REVIEW",
+        "reason": "The independent suite requires human review of browser and session effects. REVIEW is not PASSED."
+      },
+      "oidcc-client-test-rp-init-logout-other-state": {
+        "status": "FINISHED",
+        "result": "REVIEW",
+        "reason": "The independent suite requires human review of browser and session effects. REVIEW is not PASSED."
+      },
+      "oidcc-client-test-rp-init-logout-no-state": {
+        "status": "FINISHED",
+        "result": "REVIEW",
+        "reason": "The independent suite requires human review of browser and session effects. REVIEW is not PASSED."
+      }
+    }
+  }
+}

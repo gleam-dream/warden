@@ -1,0 +1,15 @@
+#!/bin/sh
+set -eu
+ROOT=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
+cd "$ROOT"
+actionlint
+for script in scripts/* test/providers/interop/hydra-setup.sh; do
+  [ -f "$script" ] || continue
+  case "$(head -n 1 "$script")" in
+    '#!/bin/sh') sh -n "$script"; shellcheck --shell=sh "$script" ;;
+  esac
+done
+# The upstream Compose fixture and retained evidence are not authored tooling.
+find consumer/browser test/conformance test/providers -type d -name node_modules -prune -o -type f -name '*.mjs' -print | while IFS= read -r source; do
+  node --check "$source"
+done

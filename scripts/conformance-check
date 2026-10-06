@@ -1,0 +1,16 @@
+#!/bin/sh
+# Independent local regression evidence; this command does not certify Warden.
+set -eu
+ROOT=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
+cd "$ROOT"
+PLANS=${1:-basic,formpost,config,refresh,logout}
+mkdir -p build/ci
+cleanup() {
+  if ! scripts/conformance-suite logs > build/ci/conformance-provider.log 2>&1; then
+    echo "conformance diagnostics unavailable" >&2
+  fi
+  scripts/conformance-suite down
+}
+trap cleanup EXIT HUP INT TERM
+scripts/conformance-suite up
+scripts/conformance "$PLANS"

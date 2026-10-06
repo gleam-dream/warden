@@ -1,14 +1,29 @@
 #!/bin/sh
-# Fast gate: formatting, warnings-as-errors build, fast test suite, negative
-# compile tests and the public-API consumer. Needs no provider or network.
-#   nix develop -c scripts/check
+# Canonical local gate. Full additionally runs disposable provider/browser suites.
+# nix develop -c scripts/check [fast|full]
 set -eu
-ROOT=$(cd "$(dirname "$0")/.." && pwd)
+ROOT=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
 cd "$ROOT"
-echo "== format"; gleam format --check src test
-echo "== build"; gleam build --warnings-as-errors
-echo "== fast suite"; WARDEN_SUITE=fast gleam test
-if [ -x scripts/negative ]; then echo "== negative compile tests"; scripts/negative; fi
-if [ -d consumer ]; then echo "== consumer"; (cd consumer && gleam format --check src test && gleam build --warnings-as-errors && gleam test); fi
-echo "== relay recipe"; scripts/relay-recipe
-echo "fast gate: ok"
+PROFILE=${1:-fast}
+case "$PROFILE" in fast|full) ;; *) echo "usage: $0 [fast|full]" >&2; exit 2 ;; esac
+nix flake check
+scripts/scriptlint
+gleam format --check src test
+gleam build --warnings-as-errors
+scripts/erlang-check
+scripts/gate-regressions
+WARDEN_SUITE=fast gleam test
+scripts/negative
+(
+  cd consumer
+  gleam format --check src test
+  gleam build --warnings-as-errors
+  "$ROOT/scripts/erlang-check" "$ROOT/consumer"
+  gleam test
+)
+scripts/relay-recipe
+nix run .#design-gate-check -- docs/design .
+if [ "$PROFILE" = full ]; then
+  for suite in node keycloak interop browser; do scripts/provider-check "$suite"; done
+fi
+echo "$PROFILE gate: ok"

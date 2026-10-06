@@ -16,6 +16,7 @@ case "${1:-up}" in
     done
     echo "conformance suite ready: https://localhost.emobix.co.uk:8443"
     ;;
+  logs) $COMPOSE logs --no-color ;;
   down) $COMPOSE down -v ;;
-  *) echo "usage: $0 up|down" >&2; exit 2 ;;
+  *) echo "usage: $0 up|down|logs" >&2; exit 2 ;;
 esac

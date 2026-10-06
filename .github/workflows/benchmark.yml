@@ -1,7 +1,5 @@
-name: CI
+name: Benchmark observations
 on:
-  push:
-  pull_request:
   workflow_dispatch:
 permissions:
   contents: read
@@ -10,10 +8,9 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  gate:
-    name: Local gate
+  benchmark:
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 20
     defaults:
       run:
         working-directory: warden
@@ -24,7 +21,6 @@ jobs:
           persist-credentials: false
       - uses: ./warden/.github/actions/siblings
         with:
-          include-recipe: "true"
           client-id: ${{ vars.SIBLINGS_APP_CLIENT_ID }}
           private-key: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.head.repo.fork) && secrets.SIBLINGS_APP_PRIVATE_KEY || '' }}
           read-token: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.head.repo.fork) && secrets.SIBLINGS_READ_TOKEN || '' }}
@@ -35,26 +31,15 @@ jobs:
         run: |
           mkdir -p build/ci
           { git rev-parse HEAD; cat sibling-revisions.txt; } > build/ci/revisions.txt
-      - name: Run canonical local gate
-        run: |
-          set -o pipefail
-          nix develop -c scripts/check 2>&1 | tee build/ci/check.log
-      - name: Retain local evidence
+      - name: Record observations without a latency threshold
+        run: nix develop -c scripts/benchmark
+      - name: Retain benchmark observations
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: warden-local-evidence
-          path: warden/build/ci/
+          name: warden-benchmark-observations
+          path: |
+            warden/build/benchmark/
+            warden/build/ci/revisions.txt
           if-no-files-found: error
-          retention-days: 14
-  ci:
-    name: CI
-    if: always()
-    needs: gate
-    runs-on: ubuntu-24.04
-    timeout-minutes: 2
-    steps:
-      - name: Require every mandatory job
-        env:
-          GATE_RESULT: ${{ needs.gate.result }}
-        run: test "$GATE_RESULT" = success
+          retention-days: 30

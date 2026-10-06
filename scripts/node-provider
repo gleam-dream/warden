@@ -8,7 +8,7 @@ PIDFILE="$ROOT/build/node-provider.pid"
 case "${1:-up}" in
   up)
     "$ROOT/scripts/test-pki"
-    [ -d "$DIR/node_modules" ] || (cd "$DIR" && npm ci --no-fund --no-audit >/dev/null)
+    (cd "$DIR" && npm ci --no-fund --no-audit >/dev/null)
     if [ -f "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE")" 2>/dev/null; then kill "$(cat "$PIDFILE")"; fi
     lsof -ti tcp:19443 -sTCP:LISTEN | xargs kill 2>/dev/null || true
     sleep 1

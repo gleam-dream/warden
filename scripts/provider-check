@@ -1,0 +1,36 @@
+#!/bin/sh
+# Disposable providers only; every admitted suite must execute or fail.
+set -eu
+ROOT=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
+cd "$ROOT"
+SUITE=${1:-}
+case "$SUITE" in
+  node) FIXTURE=node-provider ;;
+  keycloak|browser) FIXTURE=keycloak ;;
+  interop) FIXTURE=interop ;;
+  *) echo "usage: $0 node|keycloak|interop|browser" >&2; exit 2 ;;
+esac
+if [ "$SUITE" = browser ] && ! command -v google-chrome >/dev/null 2>&1; then
+  echo "browser suite requires installed Google Chrome" >&2
+  exit 1
+fi
+gleam build --warnings-as-errors
+scripts/erlang-check
+mkdir -p build/ci
+cleanup() {
+  if [ "$FIXTURE" != node-provider ]; then
+    if ! "scripts/$FIXTURE" logs > "build/ci/fixture-$SUITE.log" 2>&1; then
+      echo "provider diagnostics unavailable" >&2
+    fi
+  fi
+  "scripts/$FIXTURE" down
+}
+trap cleanup EXIT HUP INT TERM
+"scripts/$FIXTURE" up
+if [ "$SUITE" = browser ]; then
+  (cd consumer && gleam build --warnings-as-errors)
+  scripts/erlang-check "$ROOT/consumer"
+  scripts/browser-journey
+else
+  WARDEN_SUITE="$SUITE" gleam test
+fi
