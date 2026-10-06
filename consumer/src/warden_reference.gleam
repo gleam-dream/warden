@@ -73,7 +73,7 @@ pub fn main() -> Nil {
     Error(Nil) -> configuration
   }
   // WARDEN_ASSUME_UNADVERTISED_S256=1 accepts a provider whose metadata
-  // omits code_challenge_methods_supported (decision D7), such as the
+  // omits code_challenge_methods_supported, such as the
   // OpenID conformance suite's test OP.
   let configuration = case env("WARDEN_ASSUME_UNADVERTISED_S256", "") {
     "1" ->

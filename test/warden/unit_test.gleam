@@ -55,7 +55,7 @@ fn errors(config: config.Config) -> List(config.ConfigError) {
   }
 }
 
-/// The defaults are decision 5's numbers.
+/// Configuration defaults match the documented values.
 pub fn defaults_match_the_release_table_test() {
   let c = base()
   assert c.request_timeout_ms == 10_000
@@ -345,7 +345,7 @@ pub fn callback_parsing_table_test() {
   assert parse(string.repeat("x", callback.max_input_bytes + 1))
     == Error(callback.InputTooLarge)
   // Both the query and the form body are application/x-www-form-urlencoded
-  // (RFC 6749 Appendix B), where '+' is a space (review finding F8).
+  // (RFC 6749 Appendix B), where '+' is a space.
   assert callback.parse("code=a+b&state=s", True)
     == Ok(callback.CodeResponse(state: "s", code: "a b", issuer: None))
   assert callback.parse("code=a+b&state=s", False)
@@ -381,7 +381,7 @@ pub fn callback_parser_is_total_test() {
   })
 }
 
-// --- Internal security review: configuration (C10, C12, J7) -------------------
+// --- Trust anchors and credentials --------------------------------------------
 
 pub fn trust_anchors_must_all_be_certificates_test() {
   // A CERTIFICATE block whose content is not a certificate.
@@ -436,7 +436,7 @@ pub fn jwt_secret_length_limits_the_hmac_algorithms_test() {
   assert algorithms(64) == ["HS256", "HS384", "HS512"]
 }
 
-// --- Session lifetime (review finding F2) ------------------------------------
+// --- Session lifetime ---------------------------------------------------------
 
 pub fn session_lifetime_validation_test() {
   let lifetime = fn(absolute, idle) {

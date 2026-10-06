@@ -171,7 +171,7 @@ pub fn new(config: Config) -> Result(Client, StartError) {
   let provider_handle =
     provider.Provider(
       process.named_subject(names.provider),
-      // R11: a key refetch takes up to one request timeout.
+      // A key refetch takes up to one request timeout.
       config.request_timeout_ms + 1000,
     )
   Ok(runtime.Client(
@@ -592,7 +592,7 @@ pub type TransportReason {
   ResponseHeadersTooLarge
   MalformedHttp
   /// The response failed or ended early after the request may have been
-  /// sent (decision D17).
+  /// sent.
   ReceiveFailed
   UnsupportedContentEncoding
   OtherTransportFailure

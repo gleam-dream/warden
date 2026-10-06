@@ -247,8 +247,7 @@ pub type PkceAdvertisementPolicy {
   RequireAdvertisedS256
   /// Also accept a provider whose metadata omits
   /// `code_challenge_methods_supported` entirely. A provider that lists the
-  /// field without `S256` is still refused. Refused for public clients
-  /// (decision D7).
+  /// field without `S256` is still refused. Refused for public clients.
   AssumeS256WhenUnadvertised
 }
 
@@ -492,7 +491,7 @@ pub fn with_max_pending_logins(config: Config, count: Int) -> Config {
 /// `idle` without use (restore, access token, userinfo, refresh). Expired
 /// sessions are removed with their tokens. Defaults: 12 hours absolute, 1
 /// hour idle; idle must not exceed absolute, and absolute is at most a year.
-/// The number of sessions per identity is not bounded (decision D14).
+/// The number of sessions per identity is not bounded.
 pub fn with_session_lifetime(
   config: Config,
   absolute absolute: Duration,

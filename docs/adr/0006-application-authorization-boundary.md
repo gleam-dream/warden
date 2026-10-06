@@ -1,0 +1,11 @@
+# Applications project checked claims into their own permissions
+
+<a id="adr-0006"></a>
+
+- **Decision:** VerifiedIdentity, UserInfo, TokenInfo and AccessClaims retain distinct evidence meanings. Applications decode their own values and choose permissions. Warden, Relay and Fabric compose through public ports and compiled recipes, without a shared identity/grant runtime package.
+- **History:** D25 moved browser binding cookie duties into Warden; D27/D28 added checked introspection and an independent local resource role; D38 (`77da944`, 2026-10-03) preserved WrongAudience with an exhaustive on_error projection. Round 9 retained the compiled recipe boundary.
+- **Alternatives:** asking apps to own Warden's binding attributes caused duplication and weak defaults. Moving business authorization into Warden would couple endpoint policy and identity claims. Letting Relay skip Warden's audience check was briefly proposed then removed before release; current ExactAudience/AudienceIncluded remain explicit trust choices.
+- **Audience precision:** WrongAudience is classified after other token checks, so it describes an otherwise checked token for a different resource. Unavailable keys remain unavailable. Relay owns endpoint scope checks and challenge rendering; its recipe keeps Warden required scopes unset.
+- **Lifecycle distinction:** introspection adds provider-state availability/revocation cost; local JWT validation cannot see immediate revocation. Client credentials is one grant per call and has no cache or user custody. No inspected service workload established a need for core caching.
+- **Application guide:** `docs/APPLICATION-RESPONSIBILITIES.md` was an empty tracked file while README and compiled protection code linked it. The guide now names concrete consumer decisions using the existing protected reference app; it introduces no web framework or runtime API.
+- **Provenance:** [D25/D27/D28/D38](https://github.com/gleam-dream/warden/blob/f3847d102c0db9f66e4d4a72a9c7b3028507c7ac/docs/decisions.md); retained `resource.gleam`, `relay_consumer/`, `scripts/relay-recipe`, `consumer/src/warden_reference/protect.gleam` and protection/public-consumer tests. Prior disposable consumer tests at `f3847d1` passed 14 tests including one extra service-grant test; the extra probe was not retained and establishes no new runtime change.

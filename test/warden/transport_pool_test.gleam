@@ -1,6 +1,6 @@
 //// The supervised shared HTTP Gun client behind `transport.send`: reuse,
 //// replacement after a peer close, restart, caller death, deadlines and
-//// mailbox hygiene (HTTP Gun adoption, decision D11).
+//// mailbox hygiene.
 
 import gleam/dynamic.{type Dynamic}
 import gleam/erlang/process.{type Pid}

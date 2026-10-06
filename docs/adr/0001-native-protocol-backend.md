@@ -1,0 +1,11 @@
+# Warden owns protocol orchestration over gose and kryptos
+
+<a id="adr-0001"></a>
+
+- **Decision:** the sole runtime backend is native Gleam. Warden owns discovery, key caching, provider requests and claim policy; gose/kryptos own cryptographic operations. oidcc 3.9.0 remains an exact test-only differential oracle.
+- **History:** D1 selected oidcc; owner D10 selected the native backend on 2026-09-30 in `64637cb`. D13 removed the alternate before the first release on 2026-10-01 in `3b064b7`, reversing the earlier one-release fallback requirement. No published consumer depended on that fallback.
+- **Alternatives:** retaining oidcc orchestration reduced owned protocol surface but rejected a permitted refresh response without ID token and required boundary rewrites. Keeping both implementations added an unneeded pre-release selector and duplicate runtime dependencies. The native backend increases Warden-owned security surface and requires independent review.
+- **Evidence:** the recorded parity corpus covered five client-auth methods, independently generated JOSE tokens, raw oidcc differential, local interoperability and browser paths. Strict singleton audience and mandatory login ID token intentionally differ from permissive oracle behavior. Native refresh accepts missing ID token without inventing a new authentication event.
+- **Backend constraints:** gose 2.2.0 rejects X.509 JWK members and uses audience containment. Warden strips those unused certificate members and owns exact audience enforcement. Neither upstream certification nor parity receipts certify Warden.
+- **Provenance:** [D1/D6/D10/D13 at the migration source revision](https://github.com/gleam-dream/warden/blob/f3847d102c0db9f66e4d4a72a9c7b3028507c7ac/docs/decisions.md); retained `src/warden/internal/native/`, `test/integration/node/node_differential_test.gleam`, `node_refresh_probe_test.erl`, `keycloak_oidcc_probe_test.erl` and Apache-2.0 `oidcc_records.hrl`.
+- **Oracle identity:** oidcc source `aa212d52d0140addf057c34917b734647401b34e`, annotated tag `e5bad400ecb538bc0d826d54516fd7ee3b1cb2a8`; inspected token-source SHA-256 `289be9bcb0e4677cba3dc98a3b4675070aec7beb27054726da395166b85ac2e3`. Old probe restrictions describe that oracle, not current Warden support.

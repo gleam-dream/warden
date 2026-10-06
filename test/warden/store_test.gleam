@@ -91,7 +91,7 @@ pub fn a_full_store_answers_without_scanning_test() {
 }
 
 /// A store call that outlives the store timeout fails typed, and its late
-/// reply never reaches the caller's mailbox (finding F4).
+/// reply never reaches the caller's mailbox.
 pub fn slow_store_calls_fail_typed_without_late_replies_test() {
   let slow =
     store.new(

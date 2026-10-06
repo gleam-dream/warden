@@ -1,4 +1,4 @@
-//// Operational behaviour (gate V6): lifecycle and supervision, provider
+//// Operational behaviour: lifecycle and supervision, provider
 //// worker loss and restart, key rotation, bounded pending logins, atom and
 //// process growth.
 
@@ -72,7 +72,7 @@ pub fn provider_worker_crash_is_typed_and_recovers_test() {
   support.provider_stop(provider)
 }
 
-/// R5: under a supervisor, the child starts without waiting for the
+/// Under a supervisor, the child starts without waiting for the
 /// provider; operations answer `ProviderNotReady` until background
 /// discovery succeeds.
 pub fn supervised_client_discovers_in_the_background_test() {
@@ -101,7 +101,7 @@ pub fn supervised_client_discovers_in_the_background_test() {
   support.provider_stop(provider)
 }
 
-/// R5: the client value names its processes, so it stays valid when its
+/// The client value names its processes, so it stays valid when its
 /// supervisor restarts the whole Warden tree.
 pub fn the_client_survives_a_restart_of_its_tree_test() {
   let provider = support.provider_start(support.Standard)
@@ -238,7 +238,7 @@ pub fn repeated_logins_do_not_leak_processes_test() {
   support.provider_stop(provider)
 }
 
-/// R4: the login response is a 303 with the binding cookie Warden owns:
+/// The login response is a 303 with the binding cookie Warden owns:
 /// `__Host-`, `Secure`, `HttpOnly`, `Path=/`, `SameSite` by response mode,
 /// and no caching.
 pub fn login_response_sets_the_binding_cookie_safely_test() {
@@ -277,7 +277,7 @@ pub fn login_response_sets_the_binding_cookie_safely_test() {
   testing.stop_provider(provider)
 }
 
-/// R11: the provider-cache call waits as long as a key fetch can take.
+/// The provider-cache call waits as long as a key fetch can take.
 pub fn provider_calls_wait_for_one_request_timeout_test() {
   let assert Ok(client) =
     warden.new(

@@ -93,7 +93,7 @@ pub fn http_gun_events_carry_the_warden_client_label_test() {
   assert list.all(drain(inbox, []), fn(client) { client == Some("warden") })
 }
 
-/// R10: a correlation set with `with_correlation` reaches Warden's own HTTP
+/// A correlation set with `with_correlation` reaches Warden's own HTTP
 /// events, HTTP Gun's events for the same requests, and the login, refresh
 /// and logout events, so one request can be followed without pid joins.
 pub fn correlation_follows_the_session_test() {

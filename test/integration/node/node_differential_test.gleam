@@ -1,4 +1,4 @@
-//// Gate V4: the same scenario corpus through raw oidcc and through Warden,
+//// The same scenario corpus through raw oidcc and through Warden,
 //// each on its own transaction and authorization code (codes are never sent
 //// to two implementations). Every disagreement must be a documented,
 //// deliberate Warden policy.
@@ -14,10 +14,10 @@ fn raw_login(mutation: String, unused: Nil) -> String
 /// Scenarios where Warden deliberately differs from raw oidcc defaults.
 const stricter = [
   // oidcc default `trusted_audiences: any` accepts extra audiences; Warden
-  // requires exactly the client (design §3.3).
+  // requires exactly the client.
   #("extra_aud", "IdTokenAudienceMismatch"),
   // oidcc accepts a token response without an ID token; Warden requires one
-  // for login (design §3.3).
+  // for login.
   #("omit", "MissingIdToken"),
 ]
 

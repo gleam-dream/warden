@@ -1,4 +1,4 @@
-//// Key strength and purpose (internal security review, findings J1, C9):
+//// Key strength and purpose:
 //// RSA keys below 2048 bits (RFC 7518 §3.3) never verify ID tokens or sign
 //// client assertions, and keys not meant for signing are refused at import.
 

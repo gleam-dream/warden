@@ -1,0 +1,11 @@
+# Shutdown and deadlines expose their actual completion limits
+
+<a id="adr-0011"></a>
+
+- **Recorded contract:** `stop(Client) -> Nil` requests shutdown and observes supervisor exit for at most five seconds. Expiry is not reported separately. Fetch termination follows owner-death notification; returning does not synchronously join workers or external store effects.
+- **History:** post-Round9 lifecycle implementation in `8c750e5` and `d97d9c8` preserves this public API. Its comments and migration report state the limitation. Older D11 prose claiming the pool is gone when stop returns is superseded by the precise current contract.
+- **Consumer consequence:** an application cannot infer that captured resources may be destroyed immediately solely from Nil. A supervised client belongs to its parent and must be stopped there. Killing an adapter worker cannot undo a database request already accepted.
+- **Deadline precision:** complete_login propagates one configured remaining budget into effects. `internal/port.gleam` kills a timed-out store worker then awaits DOWN for up to one additional second before draining its private reply. Synchronous telemetry observer work also lacks a Warden-specific timeout. These are source-level return-latency qualifications, not a newly reproduced runtime failure.
+- **Open alternatives:** keep the bounded shutdown request when no consumer needs a join; or design a typed completion operation for a declared boundary (supervisor exit, all owned processes, or admitted adapter-call completion). A typed join must not overpromise external effect cancellation. No option is newly adopted by this migration.
+- **Evidence needed:** hold a real callback/fetch at a barrier, prove bounded typed timeout and eventual completion before resource release; cover parent-driven stop without restart. A strict complete-login return deadline also requires a barrier/observer test and an explicit cleanup policy.
+- **Provenance:** retained `warden.gleam:282`, `internal/port.gleam`, `native/provider_fetch.gleam` and lifecycle tests; [source lifecycle report](https://github.com/gleam-dream/warden/blob/f3847d102c0db9f66e4d4a72a9c7b3028507c7ac/docs/migration-round-9.md). Pending entries expose the ruling/verification gaps without authorizing code changes.

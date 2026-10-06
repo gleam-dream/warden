@@ -52,7 +52,7 @@ pub fn refresh_rotates_and_reports_the_new_token_test() {
   support.provider_stop(provider)
 }
 
-/// SSO-3: concurrent requests share one refresh; the losers wait for it
+/// Concurrent requests share one refresh; the losers wait for it
 /// and receive its token instead of an error.
 pub fn concurrent_refresh_sends_one_request_test() {
   let provider = support.provider_start(support.Standard)
@@ -203,12 +203,11 @@ pub fn uncertain_and_invalid_refresh_outcomes_quarantine_test() {
     #(support.Status(503, "temporarily_unavailable"), "provider"),
     #(support.Close, "provider"),
     #(support.MalformedJson, "RefreshResponseMalformed"),
-    // Tokens Warden cannot use as Bearer tokens, or a negative lifetime
-    // (review finding J12).
+    // Tokens Warden cannot use as Bearer tokens, or a negative lifetime.
     #(support.TokenField("token_type", "DPoP"), "RefreshResponseMalformed"),
     #(support.TokenIntField("expires_in", -5), "RefreshResponseMalformed"),
     // An error code Warden does not recognise may follow processing of the
-    // grant; the token it sent is never sent again (F6).
+    // grant; the token it sent is never sent again.
     #(support.Status(400, "unrecognised_error"), "provider"),
     #(support.IdToken("changed_sub"), "RefreshedSubjectMismatch"),
     #(support.IdToken("changed_nonce"), "RefreshedNonceMismatch"),
@@ -394,7 +393,7 @@ pub fn introspection_distinguishes_inactive_from_failure_test() {
   warden.stop(client)
 }
 
-/// SMCP-4: an active answer whose `exp` has passed is inactive, with no
+/// An active answer whose `exp` has passed is inactive, with no
 /// clock tolerance. Both sides use one fixed expiry, independent of
 /// startup latency and the wall-clock second in which a request arrives.
 pub fn introspection_checks_exp_strictly_test() {
@@ -455,7 +454,7 @@ pub fn logout_removes_custody_then_redirects_test() {
   support.provider_stop(provider)
 }
 
-/// SSO-4: request A holds the session value from before request B refreshed
+/// Request A holds the session value from before request B refreshed
 /// it. A's logout still ends the session; a second logout reports that no
 /// session existed.
 pub fn logout_with_an_older_session_value_ends_the_session_test() {
@@ -522,7 +521,7 @@ pub fn custody_loss_is_reported_as_lost_test() {
 }
 
 /// OIDC Core §12.2 permits a refresh response without an ID token; the
-/// established identity is kept (decision D10).
+/// established identity is kept.
 pub fn refresh_without_id_token_test() {
   let provider = support.provider_start(support.Standard)
   let client = start(settings(provider))
@@ -541,8 +540,7 @@ pub fn refresh_without_id_token_test() {
 }
 
 /// A refresher that dies mid-request may already have reached the provider.
-/// Its lease runs out and the generation is quarantined, never released
-/// (review finding F7, decision D21).
+/// Its lease runs out and the generation is quarantined, never released.
 pub fn an_expired_refresh_lease_quarantines_the_generation_test() {
   let provider = support.provider_start(support.Standard)
   let base = support.now_seconds()
@@ -597,7 +595,7 @@ pub fn publication_recovery_survives_the_dispatcher_test() {
 }
 
 /// An idle session ends in custody: it can no longer be restored, and its
-/// tokens are gone (review finding F2).
+/// tokens are gone.
 pub fn idle_sessions_end_test() {
   let provider = support.provider_start(support.Standard)
   let clock = support.clock_new(support.now_seconds())
@@ -648,7 +646,7 @@ pub fn use_restarts_the_idle_period_test() {
 }
 
 /// A provider that closes the connection without answering: the request may
-/// have been sent, and the public reason is `ReceiveFailed` (decision D17).
+/// have been sent, and the public reason is `ReceiveFailed`.
 pub fn a_closed_connection_reports_receive_failed_test() {
   let provider = support.provider_start(support.Standard)
   let client = start(settings(provider))

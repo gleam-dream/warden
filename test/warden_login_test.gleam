@@ -453,7 +453,7 @@ pub fn lost_custody_acknowledgement_recovers_without_exchange_test() {
   let assert Ok(again) = warden.recover_custody(client, recovery)
   assert warden.session_reference(session) == warden.session_reference(again)
   assert support.token_requests(provider) == 1
-  // After logout the recovery cannot resurrect the session (finding F5).
+  // After logout the recovery cannot resurrect the session.
   let assert Ok(_) = warden.logout(client, session, warden.default_logout())
   assert warden.recover_custody(client, recovery) == Error(warden.RecoveryEnded)
   // A different client configuration cannot use the recovery.
@@ -515,7 +515,7 @@ pub fn max_age_requires_recent_authentication_test() {
   support.provider_stop(provider)
 }
 
-/// An `auth_time` in the future is not a recent authentication (J9).
+/// An `auth_time` in the future is not a recent authentication.
 pub fn future_authentication_time_fails_max_age_test() {
   let provider = support.provider_start(support.Standard)
   support.set_int_claims(
@@ -539,7 +539,7 @@ pub fn future_authentication_time_fails_max_age_test() {
 }
 
 /// Pending-login lifetimes are wall-clock Unix time, so a durable login
-/// store shared by several nodes agrees on them (decision D20).
+/// store shared by several nodes agrees on them.
 pub fn login_lifetime_follows_the_wall_clock_test() {
   let provider = support.provider_start(support.Standard)
   let base = support.now_seconds()
@@ -555,7 +555,7 @@ pub fn login_lifetime_follows_the_wall_clock_test() {
 }
 
 /// An `auth_time` a few seconds ahead (provider clock) is within the clock
-/// tolerance (J3).
+/// tolerance.
 pub fn slightly_future_authentication_time_is_tolerated_test() {
   let provider = support.provider_start(support.Standard)
   support.set_int_claims(
@@ -653,7 +653,7 @@ pub fn incompatible_providers_are_rejected_at_startup_test() {
   })
 }
 
-/// D7: `AssumeS256WhenUnadvertised` accepts only a provider that omits
+/// `AssumeS256WhenUnadvertised` accepts only a provider that omits
 /// `code_challenge_methods_supported`; Warden still sends its S256 challenge.
 pub fn unadvertised_pkce_is_accepted_only_by_explicit_policy_test() {
   let assume = fn(provider) {
@@ -683,7 +683,7 @@ pub fn unadvertised_pkce_is_accepted_only_by_explicit_policy_test() {
 }
 
 /// An authorization endpoint may carry its own query, as Azure AD B2C's
-/// policy parameter does (review finding J6).
+/// policy parameter does.
 pub fn authorization_endpoint_query_is_preserved_test() {
   let provider = support.provider_start(support.QueryInAuthorizationEndpoint)
   let client = start(settings(provider))
@@ -697,7 +697,7 @@ pub fn authorization_endpoint_query_is_preserved_test() {
 }
 
 /// The browser is sent to the end-session endpoint with an ID-token hint,
-/// so it must be HTTPS like the authorization endpoint (J11).
+/// so it must be HTTPS like the authorization endpoint.
 pub fn insecure_end_session_endpoint_is_refused_test() {
   let provider = support.provider_start(support.InsecureEndSession)
   assert start_result(settings(provider))

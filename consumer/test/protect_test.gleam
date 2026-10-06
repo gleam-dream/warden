@@ -1,5 +1,4 @@
-//// The reference app's browser-facing protections (internal security
-//// review, findings C4–C7 and C13).
+//// The reference app's browser-facing protections.
 
 import gleam/http
 import gleam/http/cookie
@@ -12,10 +11,10 @@ import wisp/simulate
 const origin = "https://app.example"
 
 pub fn session_cookie_uses_the_host_prefix_and_is_always_secure_test() {
-  // __Host- prevents sibling subdomains from planting the cookie (C6).
+  // __Host- prevents sibling subdomains from planting the cookie.
   assert protect.session_cookie == "__Host-warden_session"
   // Secure does not depend on the request scheme, which is plain HTTP
-  // behind a TLS-terminating proxy (C5).
+  // behind a TLS-terminating proxy.
   let attributes = protect.session_attributes(600)
   assert attributes.secure
   assert attributes.http_only
@@ -26,7 +25,7 @@ pub fn session_cookie_uses_the_host_prefix_and_is_always_secure_test() {
 
 pub fn state_changing_requests_must_be_same_origin_test() {
   let post = simulate.request(http.Post, "/logout")
-  // A cross-site form post (C7).
+  // A cross-site form post.
   assert !protect.same_origin(
     simulate.header(post, "origin", "https://evil.example"),
     origin,
@@ -46,7 +45,7 @@ pub fn state_changing_requests_must_be_same_origin_test() {
 
 pub fn sessions_expire_on_the_server_test() {
   // The signed cookie carries its issue time; the browser's Max-Age is not
-  // the only limit (C4).
+  // the only limit.
   let value = protect.session_value("reference-1", issued_at: 1000)
   assert protect.read_session_value(value, now: 1000 + 3600, max_age: 3600)
     == Ok("reference-1")

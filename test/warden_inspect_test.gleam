@@ -1,7 +1,7 @@
 //// Public values never reveal secrets through `string.inspect`, `echo` or
 //// crash reports: client credentials, sealing keys, browser bindings,
 //// session references, raw claims, tokens and redirect URLs carrying an ID
-//// token (internal security review, findings C1 and F3).
+//// token.
 
 import gleam/dict
 import gleam/http/response
@@ -197,7 +197,7 @@ pub fn tokens_and_introspection_do_not_inspect_test() {
   warden.stop(client)
 }
 
-/// The follow-up from wave 1: the provider logout redirect embeds the ID
+/// The provider logout redirect embeds the ID
 /// token as `id_token_hint`, so the outcome holds it in a closure.
 pub fn logout_redirect_does_not_inspect_the_id_token_test() {
   let assert Ok(provider) = testing.start_provider(testing.provider_options())

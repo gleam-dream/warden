@@ -1,0 +1,12 @@
+# Full protocol intent remains explicit beyond the delivered facade
+
+<a id="adr-0009"></a>
+
+- **Decision:** preserve the full source design's capability scope while separating supported operations, retained later intent, optional profiles, explicit gaps and exclusions. A small public facade does not cancel unbuilt requirements.
+- **Supported additions:** implementation decisions now include durable sealed custody, local JWT resource role, RFC7009 revocation on logout, independent service/resource constructors, JSON/JWT userinfo, public local test provider and compiled caller-owned recipes.
+- **Retained later intent:** PAR, JAR, DPoP, JWT-bearer grant and dynamic registration require independent typed slices and external evidence. JARM and FAPI2 security/message signing remain optional later scope.
+- **Explicit unsupported gaps:** device grant, token exchange and back/front-channel logout require an owner growth decision. Broader refresh scopes/resource grant parameters, quarantine reconciliation and optional social-provider quirks must not appear through undocumented generic parameters.
+- **Replaceability:** the original public alternate backend was removed before release, but architecture remains replaceable through internal typed operation contracts and the same independent corpus. The original full design requires a predecessor to remain for at least one release when a default changes after published use. Custom trusted adapters cannot create identity directly. Never shadow single-use authorization or rotating refresh requests through two implementations.
+- **Exclusions:** authorization-server implementation, implicit/hybrid/password flows and JavaScript runtime remain excluded. Stateless cookie-only single use cannot be inferred from sealing; offline JWK/JWKS trust anchors were declined absent a need.
+- **Provenance:** [full Oversight design at source revision](https://github.com/gleam-dream/oversight/blob/3baff7030a96d5b6cf78b2335c16d8c203727da5/warden-design.md), its capability table and API-COVERAGE/PUBLIC-API/research/interface-lab contracts, plus [package decisions](https://github.com/gleam-dream/warden/blob/f3847d102c0db9f66e4d4a72a9c7b3028507c7ac/docs/decisions.md). The migration map records exact local source revision before Oversight retires that corpus.
+- **Rationale limit:** the original design records dispositions but does not record a completed cost/benefit decision for every later family. This ADR preserves intent; it does not fabricate adoption approval or a schedule.

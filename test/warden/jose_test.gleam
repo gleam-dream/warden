@@ -1,6 +1,5 @@
-//// ID-token and userinfo verification edge cases (internal security review,
-//// findings J4, J5, J8, J13). Tokens are minted by erlang-jose, independent
-//// of gose.
+//// ID-token and userinfo verification edge cases. Tokens are minted by
+//// erlang-jose, independently of gose.
 
 import gleam/json
 import gleam/list
@@ -63,7 +62,7 @@ pub fn a_well_formed_token_verifies_test() {
   assert reason(verify("Ed25519", "{}", claims([]), None)) == "ok"
 }
 
-/// A present claim of the wrong type is not "absent" (J4).
+/// A present claim of the wrong type is not "absent".
 pub fn mistyped_azp_and_at_hash_are_rejected_test() {
   assert reason(verify("RS256", "{}", claims([#("azp", json.int(5))]), None))
     == "authorized_party_mismatch"
@@ -76,18 +75,18 @@ pub fn mistyped_azp_and_at_hash_are_rejected_test() {
     == "access_token_hash"
 }
 
-/// EdDSA means Ed25519 here; Ed448's at_hash would need SHAKE256 (J8).
+/// EdDSA means Ed25519 here; Ed448's at_hash would need SHAKE256.
 pub fn ed448_keys_are_not_used_test() {
   assert reason(verify("Ed448", "{}", claims([]), None)) == "unknown_key"
 }
 
-/// `crit` must be a non-empty array when present (RFC 7515 §4.1.11, J13).
+/// `crit` must be a non-empty array when present (RFC 7515 §4.1.11).
 pub fn null_crit_header_is_rejected_test() {
   assert reason(verify("RS256", "{\"crit\":null}", claims([]), None))
     == "malformed"
 }
 
-/// Signed userinfo usually carries no `exp`; one that does is enforced (J5).
+/// Signed userinfo usually carries no `exp`; one that does is enforced.
 pub fn signed_userinfo_without_exp_verifies_test() {
   let userinfo = fn(overrides) {
     let #(token, jwks) =
@@ -100,7 +99,7 @@ pub fn signed_userinfo_without_exp_verifies_test() {
 }
 
 /// A provider clock slightly ahead is tolerated for `iat` and `nbf`; `exp`
-/// gets no tolerance (review finding J3).
+/// gets no tolerance.
 pub fn clock_tolerance_covers_iat_and_nbf_but_not_exp_test() {
   let check = fn(overrides) {
     reason(verify("RS256", "{}", claims(overrides), None))

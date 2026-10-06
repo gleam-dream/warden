@@ -20,7 +20,7 @@
 ////   horizon, so a late install recovery cannot bring it back.
 ////
 //// Lifetimes are wall-clock Unix seconds, because a durable store outlives
-//// any one node's monotonic clock (decision D20).
+//// any one node's monotonic clock.
 
 import gleam/bit_array
 import gleam/dynamic/decode

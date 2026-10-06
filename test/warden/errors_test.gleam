@@ -1,6 +1,6 @@
-//// R9: every error type has a description and a caller action; uncertain
-//// outcomes never map to a plain retry. And the follow-up: HTTP Gun's own
-//// connect, pool and idle bounds stay separate from the request timeout.
+//// Every error type has a description and a caller action; uncertain
+//// outcomes never map to a plain retry. HTTP Gun's connect, pool and idle
+//// bounds stay separate from the request timeout.
 
 import gleam/list
 import gleam/string
@@ -111,7 +111,7 @@ pub fn other_errors_describe_themselves_test() {
   assert store.describe_error(store.StoreFull) != ""
 }
 
-/// Follow-up (wave 3): the connect, pool-checkout, idle-read and idle
+/// The connect, pool-checkout, idle-read and idle
 /// connection bounds are HTTP Gun's own (5 s, 5 s, 30 s, 60 s), not copies
 /// of the request timeout.
 pub fn http_gun_keeps_its_separate_bounds_test() {

@@ -8,7 +8,7 @@
 //// subject and enforces the timeout. A reply that arrives after the timeout
 //// goes to the exited proxy and is dropped by the runtime, so it never
 //// lands in the caller's mailbox, where it would hold login or token
-//// material (internal security review, finding F4).
+//// material.
 
 import gleam/erlang/process.{type Subject}
 

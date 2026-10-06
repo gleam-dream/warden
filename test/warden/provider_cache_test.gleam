@@ -1,5 +1,5 @@
 //// The provider cache keeps serving its last good snapshot while a key
-//// refresh or reload is slow (internal security review, finding J2).
+//// refresh or reload is slow.
 
 import gleam/erlang/process
 import warden/internal/native/provider

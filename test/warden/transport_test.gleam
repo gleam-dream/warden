@@ -1,4 +1,4 @@
-//// The Gleam transport against real local TLS servers (probe P2, gate V6).
+//// The Gleam transport against real local TLS servers.
 
 import gleam/bit_array
 import gleam/dynamic.{type Dynamic}
@@ -113,7 +113,7 @@ pub fn response_bounds_test() {
     #(support.ManyHeaders, transport.HeadersTooLarge),
     #(support.BigHeaderLine, transport.HeadersTooLarge),
     #(support.Gzip, transport.UnsupportedContentEncoding),
-    // Owner decision D17: Gun reports these only as a peer close or a
+    // Gun reports these only as a peer close or a
     // dependency crash, so they are rejections without a finer class.
     #(support.Truncated, transport.ReceiveFailed),
     #(support.BadStatus, transport.ReceiveFailed),
@@ -238,10 +238,10 @@ pub fn classify_address_test() {
     #(Ipv6(0x2606, 0x4700, 0, 0, 0, 0, 0, 1), transport.Public),
     #(Ipv6(0x64, 0xFF9B, 0, 0, 0, 0, 0x0A00, 1), transport.Private),
     // Cloud metadata services inside ranges `allow_private` admits stay
-    // reserved, like 169.254.169.254 (review finding T2).
+    // reserved, like 169.254.169.254.
     #(Ipv6(0xFD00, 0xEC2, 0, 0, 0, 0, 0, 0x254), transport.Reserved),
     #(Ipv4(100, 100, 100, 200), transport.Reserved),
-    // IPv6 special-purpose ranges that are not public unicast (T8):
+    // IPv6 special-purpose ranges that are not public unicast:
     // Teredo, benchmarking, ORCHID v1/v2, documentation 3fff::/20.
     #(Ipv6(0x2001, 0, 0x4136, 0xE378, 0, 0, 0, 1), transport.Reserved),
     #(Ipv6(0x2001, 2, 0, 0, 0, 0, 0, 1), transport.Reserved),
@@ -296,8 +296,7 @@ fn status_body() -> decode.Decoder(#(Int, BitArray)) {
   decode.success(#(status, body))
 }
 
-/// The header limit holds for the whole head, including the last read
-/// (review finding T4).
+/// The header limit holds for the whole head, including the last read.
 pub fn header_limit_covers_the_final_read_test() {
   use s <- with_server("localhost", support.HeaderOvershoot)
   assert get(policy(), support.server_url(s, "/x"))
@@ -305,7 +304,7 @@ pub fn header_limit_covers_the_final_read_test() {
 }
 
 /// Request bodies are small form posts; a large one is refused before
-/// connecting, so a peer that stops reading cannot stall the send (T3).
+/// connecting, so a peer that stops reading cannot stall the send.
 pub fn large_request_bodies_are_refused_before_send_test() {
   use s <- with_server("localhost", support.OkJson)
   let body = Some(<<string.repeat("a", transport.max_request_body + 1):utf8>>)
@@ -319,12 +318,12 @@ pub fn large_request_bodies_are_refused_before_send_test() {
 }
 
 /// Response framing is strict: CRLF only, no control characters in the
-/// head, digits only in lengths (review finding T7).
+/// head, digits only in lengths.
 pub fn lenient_framing_is_refused_test() {
   list.each(
     [
       #(support.ControlInHeader, transport.MalformedResponse),
-      // Owner decision D17: rejected, reported without a finer class.
+      // Rejected, reported without a finer class.
       #(support.SignedContentLength, transport.ReceiveFailed),
       #(support.SignedChunkSize, transport.ReceiveFailed),
     ],
@@ -336,7 +335,7 @@ pub fn lenient_framing_is_refused_test() {
   )
 }
 
-/// Owner decision D17 (accepted HTTP Gun limitation): a bare LF in the
+/// A bare LF in the
 /// status line is read as part of the reason phrase, which Gun discards, and
 /// the body is read to the connection's close. Nothing reaches another
 /// request: the connection is not reused after a close-delimited body.
@@ -348,7 +347,7 @@ pub fn bare_lf_in_status_line_is_read_as_reason_phrase_test() {
   assert response.body == <<"ok":utf8>>
 }
 
-/// IPv6 literals are bracketed in the Host header HTTP Gun sends (T6).
+/// IPv6 literals are bracketed in the Host header HTTP Gun sends.
 /// The default port 443 cannot be bound by an unprivileged test.
 pub fn host_header_brackets_ipv6_literals_test() {
   let #(port, server) = probe_capture_server(ipv6_loopback(), 0, "ipv6")

@@ -6,7 +6,7 @@
 //// `httpc`-shaped result. Before oidcc sees a response:
 //// - a non-success body is reduced to `{"error": Code}` (RFC 6749 charset,
 ////   at most 64 bytes) or emptied, because oidcc places error bodies in error
-////   terms and telemetry metadata (decision D3);
+////   terms and telemetry metadata;
 //// - a success body declared as JSON must parse, or the request fails as
 ////   `{sent, malformed_response}`.
 //// Failures have the closed shape `{error, {warden_transport, Stage, Class}}`.

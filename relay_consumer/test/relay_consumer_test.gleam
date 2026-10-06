@@ -66,8 +66,7 @@ pub fn a_token_for_this_resource_is_admitted_test() {
   finish(provider, client)
 }
 
-/// The wave 5 case: Warden used to refuse this token itself, so Relay only
-/// ever saw `BearerRejected` and answered with the generic challenge.
+/// A checked token for another resource gets Relay's specific challenge.
 pub fn a_token_for_another_resource_is_named_by_relay_test() {
   let #(provider, client) = started()
   let result =

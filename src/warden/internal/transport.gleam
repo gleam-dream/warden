@@ -1,4 +1,4 @@
-//// Warden's HTTPS transport over HTTP Gun (decision D11, adopted).
+//// Warden's HTTPS transport over HTTP Gun.
 ////
 //// HTTP Gun owns the network: destination policy with DNS resolved once per
 //// connection and every address checked, TLS against the original host (IP
@@ -399,7 +399,7 @@ fn values(headers: List(#(String, String)), name: String) -> List(String) {
 
 // ---------------------------------------------------------------------------
 // Failure mapping: submission evidence decides the stage. No class is finer
-// than what HTTP Gun reports (decision D17).
+// than what HTTP Gun reports.
 
 fn from_gun(failure: error.Failure) -> Failure {
   let stage = case error.evidence(failure) {

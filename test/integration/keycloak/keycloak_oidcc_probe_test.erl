@@ -1,4 +1,4 @@
-%% Probe P1: exact oidcc 3.9.0 calls, options and return shapes against the
+%% Exact oidcc 3.9.0 calls, options and return shapes against the
 %% pinned Keycloak, through Warden's transport adapter. This module calls raw
 %% oidcc (not Warden) to record upstream behaviour; each assertion documents
 %% one observed fact that Warden's boundary relies on.
@@ -209,7 +209,7 @@ probe() ->
     {ok, Cc} = oidcc_token:client_credentials(Narrow, (auth())#{scope => [<<"profile">>]}),
     ?assertMatch(#oidcc_token{id = none, access = #oidcc_token_access{}}, Cc),
 
-    %% P3 (Keycloak): narrowing scope away from openid on refresh still returns
+    %% Narrowing scope away from openid on refresh still returns
     %% an ID token, so Keycloak cannot produce the absent-ID-token case; the
     %% node-oidc-provider suite reproduces it.
     {P7, O7} = login(Narrow, #{}),

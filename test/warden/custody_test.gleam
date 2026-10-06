@@ -1,6 +1,6 @@
 //// Custody over the record store: idempotent installation, tombstones,
 //// leases that quarantine, publication of an orphaned dispatch, lifetimes,
-//// sealing and tampering (findings F2, F5, F7; decisions D19 to D21).
+//// sealing and tampering.
 
 import gleam/bit_array
 import gleam/list
@@ -97,7 +97,7 @@ pub fn an_old_command_is_refused_not_reinstalled_test() {
 
 /// A reservation whose lease runs out is orphaned: new reservations are
 /// refused as quarantined, never released, and the dispatch's own
-/// publication is still accepted (finding F7).
+/// publication is still accepted.
 pub fn an_expired_lease_quarantines_but_accepts_its_publication_test() {
   let rig = rig(100_000, 100_000)
   let assert custody.Installed(1) =
@@ -182,7 +182,7 @@ pub fn settlement_releases_revokes_or_quarantines_test() {
 }
 
 /// Sessions end after the idle lifetime without use and after the absolute
-/// lifetime regardless of use (review finding F2).
+/// lifetime regardless of use.
 pub fn sessions_expire_when_idle_test() {
   let rig = rig(1000, 60)
   let assert custody.Installed(1) =

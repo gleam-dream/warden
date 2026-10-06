@@ -1,4 +1,4 @@
-%% Probe P3: actual refresh responses through pinned oidcc 3.9.0, produced by
+%% Actual refresh responses through pinned oidcc 3.9.0, produced by
 %% node-oidc-provider 9.12.2 (scriptable). Raw oidcc, not Warden: this records
 %% the backend behaviour Warden's refresh adapter must classify.
 -module(node_refresh_probe_test).

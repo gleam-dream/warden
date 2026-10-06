@@ -7,7 +7,7 @@
 //// another key or version does not open: a database writer cannot forge a
 //// session, swap two sessions or replay one record under another key. It can
 //// still restore an earlier row of the same key in full (rollback); see
-//// decision D21.
+//// docs/adr/0004-sealed-cas-custody.md.
 ////
 //// `key_id` is a digest prefix of the key, so a key ring with retired keys
 //// opens records sealed before a rotation.
