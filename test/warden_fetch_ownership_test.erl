@@ -3,7 +3,7 @@
 %% owner loss cannot be hidden by HTTP Gun cancelling its own request.
 -module(warden_fetch_ownership_test).
 -include_lib("eunit/include/eunit.hrl").
--export([observe/4, benchmark/0, snapshot_benchmark/0, hold_tree/4]).
+-export([observe/4, benchmark/0, snapshot_benchmark/0, hold_tree/4, slow_key_refresh_does_not_block_cached_snapshots/0]).
 
 stale_completion_cannot_restore_removed_key_test() ->
     with_client(fun(Test, Client, Parent, Handle) ->
@@ -148,6 +148,13 @@ with_barrier(Fun) ->
         put(ownership_observation, Previous)
     end.
 
+observe(_, _, _, {startup, Parent, Id, Mode}) ->
+    {links, [Guardian]} = process_info(self(), links),
+    {monitors, Monitors} = process_info(Guardian, monitors),
+    [Cache] = [P || {process, P} <- Monitors, P =/= self()],
+    {links, [Tree]} = process_info(Cache, links),
+    Parent ! {Id, startup_processes, Tree, Cache, self()},
+    case Mode of hold -> hold(); observe -> ok end;
 observe(_, _, Meta, {network, Parent, Id}) ->
     case maps:get(path, Meta, <<>>) of
         <<"/.well-known/openid-configuration">> -> Parent ! {Id, network_worker, self()};
@@ -373,8 +380,21 @@ obsolete_completion_cannot_settle_new_refresh_test() ->
 reload_worker_loss_keeps_snapshot_and_schedules_next_reload_test() ->
     with_direct_cache(reload, fun(Cache, Handle) ->
         Worker = blocked(),
-        stop(Worker, kill),
-        ?assertMatch({ok, _}, warden@internal@native@provider:snapshot_of(Handle)),
+        erlang:trace_pattern({erlang, send_after, 3}, true, [local]),
+        erlang:trace(Cache, true, [call]),
+        try
+            stop(Worker, kill),
+            ?assertMatch({ok, _}, warden@internal@native@provider:snapshot_of(Handle)),
+            %% Observe the actual scheduled retry before advancing its event.
+            receive
+                {trace, Cache, call, {erlang, send_after, [Delay, Cache, Message]}} ->
+                    ?assert(Delay >= 60000 andalso Delay =< 86400000),
+                    Cache ! Message
+            after 1000 -> error(reload_retry_not_scheduled) end
+        after
+            erlang:trace(Cache, false, [call]),
+            erlang:trace_pattern({erlang, send_after, 3}, false, [local])
+        end,
         Fresh = next_worker(),
         down(Fresh, 5000),
         ?assert(is_process_alive(Cache)),
@@ -406,16 +426,19 @@ reload_and_discovery_owner_loss_stop_post_response_worker_test() ->
 with_direct_cache(Mode, Fun) ->
     {ok, Test} = warden@testing:start_provider(warden@testing:provider_options()),
     try
-        Seed = case Mode of
-            reload -> {some, warden@provider_cache_test:discovered_for_lifecycle(Test)};
-            discovery -> none
-        end,
-        with_barrier(fun(_) ->
-            {Cache, Handle} = warden@provider_cache_test:start_for_lifecycle(Test, Seed),
-            unlink(Cache),
-            try Fun(Cache, Handle) after stop(Cache, shutdown) end
-        end)
+        case Mode of
+            reload -> with_lifecycle_cache(Test, fun(Cache, Handle) ->
+                {ok, {ok, _}} = warden@internal@native@provider:await_initial(Handle, 5000),
+                with_barrier(fun(_) -> send_reload(Handle), Fun(Cache, Handle) end)
+            end);
+            discovery -> with_barrier(fun(_) -> with_lifecycle_cache(Test, Fun) end)
+        end
     after warden@testing:stop_provider(Test) end.
+
+with_lifecycle_cache(Test, Fun) ->
+    {Cache, Handle} = warden@provider_cache_test:start_for_lifecycle(Test),
+    unlink(Cache),
+    try Fun(Cache, Handle) after stop(Cache, shutdown) end.
 
 obsolete_down_cannot_release_new_refresh_test() ->
     with_client(fun(Test, _, Parent, Handle) ->
@@ -612,3 +635,182 @@ await_child_join(Pool, Parent, Deadline) ->
             erlang:yield(),
             await_child_join(Pool, Parent, Deadline)
     end.
+
+manual_cache_restart_cannot_restore_startup_key_test() ->
+    {ok, _} = application:ensure_all_started(warden),
+    {ok, Test} = warden@testing:start_provider(warden@testing:provider_options()),
+    {ok, Client} = warden:new(warden@testing:config(Test, <<"https://app.test/callback">>)),
+    try
+        {links, Before} = process_info(self(), links),
+        {ok, nil} = warden:start(Client),
+        {links, After} = process_info(self(), links),
+        [Supervisor] = After -- Before,
+        [Cache] = [Pid || {_, Pid, _, _} <- supervisor:which_children(Supervisor),
+            {registered_name, Name} <- [process_info(Pid, registered_name)],
+            lists:prefix("warden_provider", atom_to_list(Name))],
+        {registered_name, Name} = process_info(Cache, registered_name),
+        Handle = {provider, {named_subject, Name}, 5000},
+        Validator = warden@resource:new(Client, <<"https://api.test">>),
+        Original = token(Test),
+        ?assertMatch({ok, _}, warden@resource:verify(Validator, Original)),
+        warden@testing:rotate_signing_key(Test),
+        warden@testing:rotate_signing_key(Test),
+        Current = token(Test),
+        ?assertMatch({ok, _}, warden@resource:verify(Validator, Current)),
+        ?assertEqual({error, unknown_signing_key}, warden@resource:verify(Validator, Original)),
+        stop(Cache, kill),
+        %% The synchronous supervisor call completes only after its child
+        %% restart has completed, so this is not a readiness race.
+        Children = supervisor:which_children(Supervisor),
+        ?assertNot(lists:keymember(Cache, 2, Children)),
+        await_ready(Handle, erlang:monotonic_time(millisecond) + 5000),
+        ?assertEqual({error, unknown_signing_key}, warden@resource:verify(Validator, Original)),
+        ?assertMatch({ok, _}, warden@resource:verify(Validator, Current)),
+        warden@testing:rotate_signing_key(Test),
+        warden@testing:rotate_signing_key(Test),
+        Newest = token(Test),
+        ?assertMatch({ok, _}, warden@resource:verify(Validator, Newest)),
+        ?assertEqual({error, unknown_signing_key}, warden@resource:verify(Validator, Current)),
+        {Second, _} = manual_cache(Supervisor),
+        stop(Second, kill),
+        supervisor:which_children(Supervisor),
+        await_ready(Handle, erlang:monotonic_time(millisecond) + 5000),
+        ?assertEqual({error, unknown_signing_key}, warden@resource:verify(Validator, Original)),
+        ?assertEqual({error, unknown_signing_key}, warden@resource:verify(Validator, Current)),
+        ?assertMatch({ok, _}, warden@resource:verify(Validator, Newest))
+    after warden:stop(Client), warden@testing:stop_provider(Test) end.
+
+
+send_reload({provider, Subject, _}) -> gleam@erlang@process:send(Subject, reload).
+
+slow_key_refresh_does_not_block_cached_snapshots() ->
+    %% The first key response initializes the real cache. The second sends
+    %% headers but stalls its body; cached reads must remain independent.
+    Counts = atomics:new(1, []),
+    Slow = warden_test_server:start("localhost", fun(_) ->
+        case atomics:add_get(Counts, 1, 1) of
+            1 -> {respond, 200, [], <<"{\"keys\":[]}">>};
+            _ -> {raw_then_hold, <<"HTTP/1.1 200 OK\r\nContent-Length: 100\r\n\r\n">>}
+        end
+    end),
+    Test = warden_test_provider:start(#{<<"jwks_uri">> => warden_test_server:url(Slow, <<"/keys">>)}),
+    Config0 = warden@config:resource_server(warden_test_provider:issuer(Test)),
+    Config1 = warden@config:with_trust(Config0, {trust_anchors_pem, warden_test_support_ffi:ca_pem()}),
+    Config = warden@config:with_destinations(Config1, allow_loopback_for_testing),
+    {ok, Client} = warden:new(Config),
+    try
+        {links, Before} = process_info(self(), links),
+        {ok, nil} = warden:start(Client),
+        {links, After} = process_info(self(), links),
+        [Supervisor] = After -- Before,
+        {_, Handle} = manual_cache(Supervisor),
+        SlowRef = maps:get(ref, Slow),
+        receive {warden_test_request, SlowRef, _} -> ok after 1000 -> error(no_initial_keys) end,
+        Caller = refresh(Handle, <<"slow-network">>),
+        receive {warden_test_request, SlowRef, _} -> ok after 1000 -> error(no_key_refresh) end,
+        Started = erlang:monotonic_time(millisecond),
+        ?assertMatch({ok, _}, warden@internal@native@provider:snapshot_of(Handle)),
+        ?assert(erlang:monotonic_time(millisecond) - Started < 200),
+        warden:stop(Client),
+        result(Caller)
+    after warden:stop(Client), warden_test_provider:stop(Test), warden_test_server:stop(Slow) end.
+
+manual_cache(Supervisor) ->
+    [Cache] = [Pid || {_, Pid, _, _} <- supervisor:which_children(Supervisor),
+        {registered_name, Name} <- [process_info(Pid, registered_name)],
+        lists:prefix("warden_provider", atom_to_list(Name))],
+    {registered_name, Name} = process_info(Cache, registered_name),
+    {Cache, {provider, {named_subject, Name}, 5000}}.
+
+
+manual_restart_refuses_unavailable_or_incompatible_provider_then_recovers_test() ->
+    lists:foreach(fun(Overrides) ->
+        Test = warden_test_provider:start(),
+        {ok, Client} = warden:new(warden_login_test:settings(Test)),
+        try
+            {links, Before} = process_info(self(), links),
+            {ok, nil} = warden:start(Client),
+            {links, After} = process_info(self(), links),
+            [Tree] = After -- Before,
+            {Cache, Handle} = manual_cache(Tree),
+            Validator = warden@resource:new(Client, <<"https://api.test">>),
+            Original = fixture_token(Test),
+            ?assertMatch({ok, _}, warden@resource:verify(Validator, Original)),
+            warden_test_provider:rotate_key(Test),
+            Current = fixture_token(Test),
+            ?assertMatch({ok, _}, warden@resource:verify(Validator, Current)),
+            ?assertEqual({error, unknown_signing_key}, warden@resource:verify(Validator, Original)),
+            warden_test_provider:metadata(Test, Overrides),
+            stop(Cache, kill),
+            supervisor:which_children(Tree),
+            %% Completion, including incompatible metadata, is a real network
+            %% attempt. The cache must still be empty afterwards.
+            {ok, _} = warden@internal@native@provider:await_initial(Handle, 5000),
+            ?assertEqual({error, {keys_unavailable, provider_not_ready}},
+                         warden@resource:verify(Validator, Original)),
+            ?assertEqual({error, {keys_unavailable, provider_not_ready}},
+                         warden@resource:verify(Validator, Current)),
+            warden_test_provider:metadata(Test, #{}),
+            await_ready(Handle, erlang:monotonic_time(millisecond) + 5000),
+            ?assertEqual({error, unknown_signing_key}, warden@resource:verify(Validator, Original)),
+            ?assertMatch({ok, _}, warden@resource:verify(Validator, Current))
+        after warden:stop(Client), warden_test_provider:stop(Test) end
+    end, [#{<<"jwks_uri">> => <<"https://localhost:1/keys">>},
+          #{<<"code_challenge_methods_supported">> => [<<"plain">>]}]).
+
+fixture_token(Test) ->
+    {Key, Kid} = warden_test_provider:key(Test),
+    Now = erlang:system_time(second),
+    Claims = #{<<"iss">> => warden_test_provider:issuer(Test), <<"sub">> => <<"ada">>,
+               <<"aud">> => <<"https://api.test">>, <<"exp">> => Now + 300,
+               <<"iat">> => Now, <<"jti">> => <<"test">>, <<"client_id">> => <<"warden-rp">>},
+    {_, Token} = jose_jws:compact(jose_jwt:sign(Key,
+        #{<<"alg">> => <<"RS256">>, <<"kid">> => Kid, <<"typ">> => <<"at+jwt">>}, Claims)),
+    Token.
+
+failed_manual_start_cleans_owned_tree_and_worker_test() ->
+    lists:foreach(fun({Variant, Expected, Mode}) ->
+        Test = warden_test_support_ffi:provider_start(Variant),
+        Config0 = warden_login_test:settings(Test),
+        Config = warden@config:with_startup_timeout(Config0, gleam@time@duration:milliseconds(300)),
+        {ok, Client} = warden:new(Config),
+        Id = make_ref(),
+        ok = telemetry:attach(Id, [warden, http, request], fun ?MODULE:observe/4,
+                              {startup, self(), Id, Mode}),
+        try
+            Started = erlang:monotonic_time(millisecond),
+            ?assertEqual(Expected, warden:start(Client)),
+            ?assert(erlang:monotonic_time(millisecond) - Started < 1000),
+            {Tree, Cache, Worker} = receive
+                {Id, startup_processes, T, C, W} -> {T, C, W}
+            after 1000 -> error(no_startup_processes) end,
+            down(Tree, 1000),
+            down(Cache, 1000),
+            down(Worker, 1000),
+            ?assertEqual({monitors, []}, process_info(self(), monitors)),
+            telemetry:detach(Id),
+            %% The same value can start after failure and the provider is fixed.
+            warden_test_provider:metadata(Test, #{}),
+            ?assertEqual({ok, nil}, warden:start(Client))
+        after telemetry:detach(Id), warden:stop(Client), warden_test_provider:stop(Test) end
+    end, [{standard, {error, startup_timed_out}, hold},
+          {no_s256, {error, {provider_incompatible, [no_s256]}}, observe},
+          {wrong_issuer, {error, {discovery_failed, issuer_mismatch}}, observe}]).
+
+first_discovery_failure_is_retained_after_background_recovery_test() ->
+    Test = warden_test_provider:start(#{<<"issuer">> => <<"https://wrong.test">>}),
+    {ok, Client} = warden:new(warden_login_test:settings(Test)),
+    Builder = gleam@otp@static_supervisor:new(one_for_one),
+    {ok, {started, Parent, _}} = gleam@otp@static_supervisor:start(
+        gleam@otp@static_supervisor:add(Builder, warden:supervised(Client))),
+    unlink(Parent),
+    try
+        {registered_name, Name} = process_info(cache(Parent), registered_name),
+        Handle = {provider, {named_subject, Name}, 5000},
+        ?assertEqual({ok, {error, {policy, <<"issuer_mismatch">>}}},
+                     warden@internal@native@provider:await_initial(Handle, 5000)),
+        warden_test_provider:metadata(Test, #{}),
+        await_ready(Handle, erlang:monotonic_time(millisecond) + 5000),
+        ?assertEqual({ok, {error, {policy, <<"issuer_mismatch">>}}},
+                     warden@internal@native@provider:await_initial(Handle, 5000))
+    after stop(Parent, shutdown), warden_test_provider:stop(Test) end.

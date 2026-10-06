@@ -1,7 +1,7 @@
 //// Provider metadata and signing keys for the native backend.
 ////
-//// `discover` loads discovery and the JWKS once at startup through Warden's
-//// transport. A supervised actor then holds them, reloads both on a timer
+//// Each cache incarnation discovers metadata and the JWKS through Warden's
+//// transport. The actor then holds them and reloads both on a timer
 //// derived from `cache-control` (bounded), and refreshes keys on demand for
 //// an unknown `kid`, at most once per second. A failed reload keeps the
 //// previous values. Unusable JWKs are skipped (RFC 7517 §5).
@@ -331,6 +331,7 @@ fn metadata_decoder() -> decode.Decoder(#(Metadata, String)) {
 
 pub opaque type Message {
   Get(reply: Subject(Option(Snapshot)))
+  FirstDiscovery(reply: Subject(Result(Metadata, Failure)))
   RefreshKeys(kid: Option(String), reply: Subject(Option(Snapshot)))
   Discover
   Reload
@@ -350,6 +351,11 @@ type Fetch {
   Discovering(worker: Background)
 }
 
+type InitialDiscovery {
+  Pending(waiter: Option(Subject(Result(Metadata, Failure))))
+  Completed(Result(Metadata, Failure))
+}
+
 type State {
   State(
     self: Subject(Message),
@@ -357,6 +363,7 @@ type State {
     policy: transport.Policy,
     accept: fn(Metadata) -> Bool,
     discovered: Option(Discovered),
+    initial: InitialDiscovery,
     /// Delay before the next background discovery attempt.
     backoff_ms: Int,
     last_key_refresh: Int,
@@ -375,34 +382,27 @@ const first_backoff_ms = 1000
 
 const max_backoff_ms = 60_000
 
-/// Start the provider cache. With a `seed` (from `warden.start`) it serves
-/// at once; without one (supervision, or a restart) it discovers in the
-/// background, retrying with backoff from 1 s to 60 s, and answers
-/// `NotReady` until discovery succeeds and `accept` holds for the
-/// metadata. Initialisation never waits for the provider.
+/// Start an empty provider cache. Each incarnation discovers independently
+/// in the background and answers `NotReady` until compatible discovery succeeds.
+/// One initial outcome (metadata or failure, never keys) is retained so manual
+/// startup can await the first attempt without racing its completion.
 pub fn start(
   name: process.Name(Message),
   issuer: String,
   policy: transport.Policy,
-  seed: Option(Discovered),
   accept: fn(Metadata) -> Bool,
 ) -> actor.StartResult(Subject(Message)) {
   actor.new_with_initialiser(1000, fn(named) {
     // Timers and fetch results belong to this incarnation, never its name.
     let self = process.new_subject()
-    case seed {
-      Some(discovered) -> {
-        process.send_after(self, discovered.ttl_ms, Reload)
-        Nil
-      }
-      None -> process.send(self, Discover)
-    }
+    process.send(self, Discover)
     actor.initialised(State(
       self:,
       issuer:,
       policy:,
       accept:,
-      discovered: seed,
+      discovered: None,
+      initial: Pending(None),
       backoff_ms: first_backoff_ms,
       last_key_refresh: monotonic_ms(),
       attempted_kids: [],
@@ -469,6 +469,20 @@ fn fetch_exited(
 fn handle(state: State, message: Message) -> actor.Next(State, Message) {
   case message {
     FetchExited(down) -> fetch_exited(state, down)
+    FirstDiscovery(reply) ->
+      case state.initial {
+        Completed(outcome) -> {
+          process.send(reply, outcome)
+          actor.continue(state)
+        }
+        Pending(None) ->
+          actor.continue(State(..state, initial: Pending(Some(reply))))
+        Pending(Some(_)) -> {
+          // Only manual startup owns this single bounded observer.
+          process.send(reply, Error(protocol.Unmapped))
+          actor.continue(state)
+        }
+      }
     Get(reply) -> {
       process.send(reply, snapshot(state))
       actor.continue(state)
@@ -491,7 +505,9 @@ fn handle(state: State, message: Message) -> actor.Next(State, Message) {
     Discovery(pid, result) ->
       case finish_background(state, pid) {
         False -> actor.continue(state)
-        True ->
+        True -> {
+          let state =
+            complete_initial(state, result.map(result, fn(d) { d.metadata }))
           case result {
             Ok(discovered) ->
               case state.accept(discovered.metadata) {
@@ -510,6 +526,7 @@ fn handle(state: State, message: Message) -> actor.Next(State, Message) {
               }
             Error(_) -> retry_discovery(state)
           }
+        }
       }
     RefreshKeys(kid, reply) ->
       case state.fetch, state.discovered {
@@ -618,6 +635,27 @@ fn handle(state: State, message: Message) -> actor.Next(State, Message) {
         }
       }
   }
+}
+
+fn complete_initial(state: State, outcome: Result(Metadata, Failure)) -> State {
+  case state.initial {
+    Completed(_) -> state
+    Pending(waiter) -> {
+      case waiter {
+        Some(reply) -> process.send(reply, outcome)
+        None -> Nil
+      }
+      State(..state, initial: Completed(outcome))
+    }
+  }
+}
+
+/// Only the manual startup caller observes this incarnation's first attempt.
+pub fn await_initial(
+  provider: Provider,
+  timeout: Int,
+) -> Result(Result(Metadata, Failure), call.CallError) {
+  call.call(provider.subject, timeout, FirstDiscovery)
 }
 
 fn retry_discovery(state: State) -> actor.Next(State, Message) {

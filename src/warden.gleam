@@ -202,7 +202,7 @@ pub fn new(config: Config) -> Result(Client, StartError) {
 }
 
 /// Start the client's processes under a supervisor linked to the caller,
-/// after discovering the provider and checking its metadata. Waits at most
+/// and wait for its first discovery and metadata compatibility check. Waits at most
 /// the startup timeout (default 15 s).
 pub fn start(client: Client) -> Result(Nil, StartError) {
   use _ <- result.try(ensure_applications())
@@ -211,24 +211,48 @@ pub fn start(client: Client) -> Result(Nil, StartError) {
     Error(Nil) -> Ok(Nil)
   })
   let settings = client.settings
-  // One discovery and key load within the startup timeout, on a one-shot
-  // HTTP Gun client; the provider cache starts from it.
   let deadline = secure.monotonic_ms() + settings.startup_timeout_ms
-  let one_shot = transport.Policy(..client.http, pool: None)
-  use discovered <- result.try(
-    provider.discover(settings.issuer, one_shot, deadline)
-    |> result.map_error(fn(f) {
-      case secure.monotonic_ms() >= deadline {
-        True -> StartupTimedOut
-        False -> DiscoveryFailed(provider_failure(f))
+  use pid <- result.try(start_tree(client, deadline))
+  let handle =
+    provider.Provider(
+      process.named_subject(client.names.provider),
+      settings.startup_timeout_ms,
+    )
+  let outcome = case
+    provider.await_initial(handle, int.max(0, deadline - secure.monotonic_ms()))
+  {
+    Ok(Ok(metadata)) ->
+      case compatibility(settings, metadata) {
+        [] -> Ok(Nil)
+        problems -> Error(ProviderIncompatible(problems))
       }
-    }),
-  )
-  use _ <- result.try(case compatibility(settings, discovered.metadata) {
-    [] -> Ok(Nil)
-    problems -> Error(ProviderIncompatible(problems))
-  })
-  start_tree(client, Some(discovered), deadline) |> result.replace(Nil)
+    Ok(Error(failure)) ->
+      case secure.monotonic_ms() >= deadline {
+        True -> Error(StartupTimedOut)
+        False -> Error(DiscoveryFailed(provider_failure(failure)))
+      }
+    Error(_) ->
+      case secure.monotonic_ms() >= deadline {
+        True -> Error(StartupTimedOut)
+        False -> Error(ProcessStartFailed)
+      }
+  }
+  case outcome {
+    Ok(Nil) -> Ok(Nil)
+    Error(_) -> {
+      // This PID is the tree this call created, never a later name owner.
+      // Cleanup cannot extend the startup deadline by stop's five seconds.
+      let monitor = process.monitor(pid)
+      process.unlink(pid)
+      process.send_abnormal_exit(pid, Shutdown)
+      let _ =
+        process.new_selector()
+        |> process.select_specific_monitor(monitor, fn(_) { Nil })
+        |> process.selector_receive(int.max(0, deadline - secure.monotonic_ms()))
+      process.demonitor_process(monitor)
+      outcome
+    }
+  }
 }
 
 /// A child specification for an application supervision tree. The child
@@ -245,7 +269,6 @@ pub fn supervised(client: Client) -> supervision.ChildSpecification(Client) {
       |> result.try(fn(_) {
         start_tree(
           client,
-          None,
           secure.monotonic_ms() + client.settings.startup_timeout_ms,
         )
       })
@@ -305,7 +328,6 @@ fn ensure_applications() -> Result(Nil, StartError) {
 
 fn start_tree(
   client: Client,
-  seed: Option(provider.Discovered),
   deadline: Int,
 ) -> Result(process.Pid, StartError) {
   let settings = client.settings
@@ -337,13 +359,7 @@ fn start_tree(
     |> supervisor.add(transport.pool_child(client.http, names.pool))
     |> supervisor.add(
       supervision.worker(fn() {
-        provider.start(
-          names.provider,
-          settings.issuer,
-          client.http,
-          seed,
-          accept,
-        )
+        provider.start(names.provider, settings.issuer, client.http, accept)
       }),
     )
   let builder =
