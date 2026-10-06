@@ -32,4 +32,38 @@ if (cd "$WORK" && WARDEN_SUITE=node erl -noshell -pa "$ROOT/build/dev/erlang/war
   exit 1
 fi
 grep -q 'empty_suite' "$WORK/empty-suite"
+# Run the real disposable PKI generator in an isolated checkout. Containers
+# need the localhost leaf key; CA and every other leaf key stay owner-only.
+PKI_CONTROL="$WORK/pki-control"
+mkdir -p "$PKI_CONTROL/scripts"
+cp "$ROOT/scripts/test-pki" "$PKI_CONTROL/scripts/test-pki"
+cat > "$WORK/pki-mode-check.cjs" <<'NODE'
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const [directory, phase] = process.argv.slice(2);
+const keys = fs.readdirSync(directory).filter(name => /\.(key|cakey)$/.test(name));
+for (const expected of ['localhost.key', 'ca.cakey', 'wrong_host.key']) {
+  assert(keys.includes(expected), 'required generated key exists: ' + expected);
+}
+for (const key of keys) {
+  const mode = fs.statSync(directory + '/' + key).mode & 0o777;
+  assert.equal(mode, key === 'localhost.key' ? 0o644 : 0o600, 'key mode: ' + key);
+}
+const leaf = directory + '/localhost.key';
+const state = fs.statSync(leaf);
+const identity = { inode: state.ino, modified: state.mtimeMs, size: state.size };
+const metadata = directory + '/.leaf-metadata.json';
+if (phase === 'fresh') {
+  fs.writeFileSync(metadata, JSON.stringify(identity));
+  fs.chmodSync(leaf, 0o600);
+} else {
+  assert.deepEqual(identity, JSON.parse(fs.readFileSync(metadata, 'utf8')),
+    'cached server key retained without regeneration');
+}
+console.log('PKI permissions and key preservation: ' + phase + ' passed');
+NODE
+"$PKI_CONTROL/scripts/test-pki"
+node "$WORK/pki-mode-check.cjs" "$PKI_CONTROL/build/test-pki" fresh
+"$PKI_CONTROL/scripts/test-pki"
+node "$WORK/pki-mode-check.cjs" "$PKI_CONTROL/build/test-pki" reuse
 node --test "$ROOT/test/conformance/verdict.test.mjs"

@@ -3,6 +3,8 @@
 # a test CA, a localhost leaf (SAN localhost, 127.0.0.1), a wrong-host leaf,
 # an expired leaf, a leaf from an untrusted CA and an IPv6-literal leaf
 # (SAN ::1, 127.0.0.1). Keys never leave build/.
+# Only the disposable localhost server key is readable by fixture containers;
+# CA signing keys and other leaf keys remain owner-only.
 # OpenSSL is used because browsers reject certificates whose RSA algorithm
 # identifiers omit NULL parameters, as Erlang's pkix_test_data produces.
 set -eu
@@ -29,6 +31,7 @@ if [ -f "$DIR/ca.pem" ] && [ "${1:-}" != "--force" ]; then
   # Existing PKI: add leaves introduced later, keep everything else.
   cd "$DIR"
   [ -f ipv6.pem ] || { leaf ipv6 ca "IP:::1,IP:127.0.0.1"; chmod 600 ipv6.key; }
+  chmod 644 localhost.key
   exit 0
 fi
 rm -rf "$DIR"; mkdir -p "$DIR"; cd "$DIR"
@@ -42,3 +45,4 @@ leaf conformance ca "DNS:localhost.emobix.co.uk,DNS:localhost"
 leaf ipv6 ca "IP:::1,IP:127.0.0.1"
 rm -f untrusted.pem
 chmod 600 ./*.key ./*.cakey
+chmod 644 localhost.key
