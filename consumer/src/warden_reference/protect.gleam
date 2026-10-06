@@ -4,6 +4,7 @@
 import gleam/http/cookie
 import gleam/http/request
 import gleam/int
+import gleam/list
 import gleam/option.{None, Some}
 import gleam/string
 import wisp.{type Request, type Response}
@@ -51,14 +52,16 @@ pub fn read_session_value(
   now now: Int,
   max_age max_age: Int,
 ) -> Result(String, Nil) {
-  case string.split_once(value, ".") {
-    Ok(#(reference, issued)) ->
+  // The opaque custody reference can contain periods. Only the final
+  // delimiter separates the issue time in the verified cookie payload.
+  case list.reverse(string.split(value, ".")) {
+    [issued, reference, ..prefix] ->
       case int.parse(issued) {
         Ok(issued_at) if now - issued_at <= max_age && issued_at <= now ->
-          Ok(reference)
+          Ok([reference, ..prefix] |> list.reverse |> string.join("."))
         _ -> Error(Nil)
       }
-    Error(Nil) -> Error(Nil)
+    _ -> Error(Nil)
   }
 }
 

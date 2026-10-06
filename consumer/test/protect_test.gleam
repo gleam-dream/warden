@@ -55,6 +55,42 @@ pub fn sessions_expire_on_the_server_test() {
     == Error(Nil)
 }
 
+pub fn opaque_session_references_keep_their_periods_test() {
+  let reference = "synthetic.epoch.synthetic-reference"
+  let value = protect.session_value(reference, issued_at: 1000)
+  assert value == reference <> ".1000"
+  assert protect.read_session_value(value, now: 1000, max_age: 3600)
+    == Ok(reference)
+  assert protect.read_session_value(value, now: 4600, max_age: 3600)
+    == Ok(reference)
+  assert protect.read_session_value(value, now: 4601, max_age: 3600)
+    == Error(Nil)
+}
+
+pub fn malformed_and_future_session_timestamps_are_refused_test() {
+  assert protect.read_session_value(
+      "synthetic.reference",
+      now: 1000,
+      max_age: 3600,
+    )
+    == Error(Nil)
+  assert protect.read_session_value(
+      "synthetic.reference.invalid",
+      now: 1000,
+      max_age: 3600,
+    )
+    == Error(Nil)
+  assert protect.read_session_value(
+      "synthetic.reference.",
+      now: 1000,
+      max_age: 3600,
+    )
+    == Error(Nil)
+  let future = protect.session_value("synthetic.reference", issued_at: 1001)
+  assert protect.read_session_value(future, now: 1000, max_age: 3600)
+    == Error(Nil)
+}
+
 pub fn responses_carry_security_headers_test() {
   let response = protect.security_headers(wisp.ok())
   let header = fn(name) { list.key_find(response.headers, name) }

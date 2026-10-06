@@ -104,7 +104,8 @@ await scenario("replayed callback is rejected", async (context) => {
   const response = await page.goto(callback.url);
   const body = await page.textContent("body");
   expect(
-    response.status() === 401 && body.includes("already used"),
+    response.status() === 401 &&
+      body.includes("the login was already completed"),
     `status ${response.status()} ${body}`,
   );
   return { status: response.status() };
@@ -170,11 +171,13 @@ await scenario(
     const second = await page.goto(denial);
     const secondBody = await page.textContent("body");
     expect(
-      first.status() === 401 && firstBody.includes("AccessDenied"),
+      first.status() === 401 &&
+        firstBody.includes("the provider denied the login"),
       firstBody,
     );
     expect(
-      second.status() === 401 && secondBody.includes("already used"),
+      second.status() === 401 &&
+        secondBody.includes("the login was already completed"),
       secondBody,
     );
     return null;
@@ -212,7 +215,7 @@ await scenario(
     await other.close();
     expect(
       rejected.status() === 400 &&
-        rejectedBody.includes("BrowserBindingMissing"),
+        rejectedBody.includes("browser binding cookie missing"),
       rejectedBody,
     );
     await cdp.send("Fetch.disable");
@@ -234,7 +237,7 @@ await scenario("expired login is rejected", async (context) => {
   await keycloakLogin(page);
   await page.waitForLoadState("load");
   const body = await page.textContent("body");
-  expect(body.includes("took too long"), body);
+  expect(body.includes("the login expired"), body);
   return null;
 });
 
