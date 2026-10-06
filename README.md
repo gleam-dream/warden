@@ -118,6 +118,14 @@ client starts without waiting for the provider and discovers it in the
 background (retrying from 1 s to 60 s); until then operations answer
 `ProviderNotReady`. A supervised client is stopped through its parent.
 
+Every replacement cache discovers the provider again, including caches created
+by `warden.start`. Until fresh compatible metadata and keys arrive, operations
+return `ProviderNotReady`; original startup keys are never replayed. Manual
+`start` still waits for its first attempt and returns its existing typed error
+on failure. Failed startup requests shutdown of only the tree that call created and waits
+for the remaining startup budget; shutdown can finish after a timeout returns. The cache retains one first-attempt outcome
+(metadata or failure, never signing keys) so startup cannot race completion.
+
 Each cache owns at most one asynchronous discovery, metadata reload or key
 refresh. Cached reads keep using the last accepted snapshot while it runs.
 A cache restart cannot accept an older cache's completion. A whole-tree

@@ -8,6 +8,12 @@ and the evidence for each wave in [docs/PROGRESS.md](docs/PROGRESS.md).
 
 ## Unreleased
 
+- Discover fresh provider metadata and signing keys after every cache restart,
+  including manually started clients. A restarted cache cannot replay removed
+  startup keys. Manual startup awaits the first discovery attempt through the
+  same cache and preserves its bounded readiness and existing typed errors.
+  Failed startup shuts down only the tree it created. No public API changes.
+
 - Join a previous client tree's named child processes before reusing their
   names after abrupt supervisor death. Discovery and cleanup share the
   configured startup deadline; expiry returns `StartupTimedOut`. This avoids

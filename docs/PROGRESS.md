@@ -3,6 +3,67 @@
 This file is the durable progress record for the Warden program. Read it
 before relying on conversation history. Closed-wave entries are append-only.
 
+## Round 9: manual-start snapshot ownership (2026-10-05)
+
+- A public-validator regression failed before production edits: key A was
+  accepted, removed by two rotations and rejected; killing only the cache of a
+  manually started client made A valid again. The child specification captured
+  the original discovery snapshot and replayed it on restart.
+- Every cache now starts empty. `warden.start` awaits that cache's first attempt;
+  supervised startup keeps background discovery. Both modes use the same cache
+  lifecycle, without a seed, extra bootstrap request or coordinator. Existing
+  typed startup errors, successful-start readiness and deadlines are preserved.
+- Startup owns one bounded first-outcome observation: metadata or a failure,
+  never signing keys. It retains that outcome even after background recovery,
+  so a slow startup observer cannot miss a first-attempt failure. Supervised
+  caches retain the same bounded value without requiring a mode flag.
+- Failed startup requests shutdown of the actual tree it created and waits only
+  for the remaining deadline. Child exits may follow a timeout return; an
+  immediate retry can briefly see `AlreadyStarted` while its supervisor drains.
+  Tests await actual tree, cache and network-worker termination before retrying.
+- Four added tests cover successive removed keys across two cache restarts,
+  unavailable and incompatible restart discovery followed by recovery, retained
+  first failure after recovery, and cleanup after timeout, discovery failure and
+  incompatibility. All token decisions go through the public resource validator.
+  Existing reload tests observe the actual scheduled timer before replaying its
+  event, so removal of the seeded test constructor preserves scheduling coverage.
+
+- The unchanged `nix develop --command scripts/check` gate passed: 209 core
+  tests, 18 negative compilation fixtures plus the positive control, 13 external
+  consumer tests and six compiled Relay-recipe tests. A focused selection of
+  lifecycle, existing startup and operational tests passed 38 tests using the
+  repository runner's existing timeout scaling.
+
+### Large key-set forwarding measurement
+
+- A local OTP 28 run with four schedulers compared a monitored direct worker
+  with the real fetch guardian. Each pair alternated order; five pairs used
+  generated public P-256 keys with distinct key identifiers. No external
+  credentials or provider requests were involved. Worker-owned terms avoid
+  literal-sharing copy shortcuts. The term workload decodes a serialized term
+  and delivers it; the parse workload parses actual JWKS JSON and delivers it.
+- Median term-decode-and-delivery time, in microseconds:
+
+  | Keys  | Direct worker |  Guardian | Additional time |
+  | ----- | ------------: | --------: | --------------: |
+  | 1     |          7.46 |     14.18 |            6.72 |
+  | 100   |        244.30 |    296.16 |           51.86 |
+  | 1,000 |      2,448.96 |  3,003.75 |          554.79 |
+  | 5,000 |     14,815.49 | 19,364.45 |        4,548.96 |
+
+- The 5,000-key response was 828,903 JSON bytes, below the existing 1 MiB
+  response bound. Its decoded flat term was 2,160,024 bytes. A guardian held
+  immediately before forwarding occupied 2,546,568 bytes after garbage
+  collection; this excludes worker, cache and transport memory and is not a
+  total peak-memory measurement. Costs multiply across concurrent active fetches.
+- For 5,000 keys, actual parse-and-delivery medians were 1.435 s direct and
+  1.410 s guarded. The five-pair ranges overlapped: 1.412–1.778 s direct and
+  1.395–1.691 s guarded. Parsing dominated; these samples do not show a speedup.
+  The comparison isolates a direct worker and a guardian, not entire old and
+  new Warden releases, and does not establish worst-case or deployment capacity.
+  The data justifies recording the copy and allocation cost, not adding another
+  storage or sharing abstraction.
+
 ## Round 9: provider fetch ownership (2026-10-05)
 
 - Discovery, reload and key refresh now belong to the specific cache process

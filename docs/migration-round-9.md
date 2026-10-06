@@ -72,10 +72,48 @@
 - An active fetch adds one guardian beside the existing network worker,
   three lifecycle monitors and one link. The guardian forwards one result,
   adding a message hop and copying that term once more. Copy cost grows with
-  the decoded key-set size; the small local benchmark does not measure the
-  worst-case cost of a large JWKS within the existing response-size bound.
+  the decoded key-set size. A later 5,000-key local measurement (829 KB JSON,
+  2.16 MB decoded term) measured 4.55 ms additional term-decode-and-delivery
+  time and 2.55 MB for the held guardian after garbage collection. Actual
+  parsing dominated the workload. This is neither a worst-case bound nor a
+  total peak-memory figure; see the method and ranges in `docs/PROGRESS.md`.
 - Helpers and monitors terminate when the operation or owner ends. They are
   local to a cache, with at most one active fetch per cache. Cached reads
   and unrelated clients do not acquire a shared lock.
 - Local before/after measurements are recorded in `docs/PROGRESS.md`.
   They measure a microbenchmark on one machine, not deployment capacity.
+
+## Manual-start cache restarts
+
+- Before: `warden.start` discovered metadata and keys before building the tree.
+  Its child specification captured that snapshot, so a cache restart could
+  restore startup keys that a later refresh had removed.
+- After: every cache starts empty and discovers independently. Manual startup
+  awaits the first attempt through that cache; supervised startup remains
+  asynchronous. Cache restart answers `ProviderNotReady` until compatible
+  discovery succeeds and retains the existing 1–60 s retry backoff.
+- Public signatures, successful-start readiness, `StartupTimedOut`,
+  `DiscoveryFailed` and `ProviderIncompatible` remain unchanged:
+
+  ```gleam
+  // Before and after: ready on success; no caller migration.
+  let assert Ok(client) = warden.new(config)
+  let assert Ok(Nil) = warden.start(client)
+  let validator = resource.new(client, audience: "https://api.example.com")
+  resource.verify(validator, bearer)
+  ```
+
+- Failed startup requests shutdown only for the actual tree it created. Its
+  cleanup wait uses the remaining startup deadline; it does not add `stop`'s
+  separate five-second wait. Child termination can finish after a timeout
+  returns. An immediate retry can briefly return `AlreadyStarted` while the
+  supervisor drains; after its exit, startup joins remaining owned children.
+- A cache retains one first-attempt outcome containing metadata or a failure,
+  never keys. This bounded value prevents a fast failed attempt followed by a
+  successful background retry from hiding the failure from manual startup.
+  Supervised caches retain the same bounded value even when nobody awaits it.
+- Fresh discovery increases restart latency and makes readiness depend on the
+  provider being reachable and compatible. Normal cache reads and key refreshes
+  do not use the startup observer. There is no new public option, coordinator,
+  dependency, extra bootstrap fetch or network operation inside the supervisor
+  callback.
