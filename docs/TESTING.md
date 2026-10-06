@@ -35,7 +35,7 @@ scripts/conformance
 ## CI checks and evidence
 
 - The mandatory CI workflow runs the canonical local gate on every push and pull request. Its final CI status rejects failed, cancelled or skipped mandatory jobs. Provider evidence runs on relevant source, fixture, toolchain and sibling-pin changes, daily, and on request.
-- CI checks out Warden beside Sinal, HTTP Gun, Relay and JSON Blueprint at the full revisions in `sibling-revisions.txt`. Private siblings require a GitHub App with contents-read access to Sinal, HTTP Gun and Relay (`SIBLINGS_APP_CLIENT_ID` variable and `SIBLINGS_APP_PRIVATE_KEY` secret), or a narrowly scoped `SIBLINGS_READ_TOKEN` secret. Checkouts do not persist credentials; fork pull requests cannot receive them. Missing access fails the gate rather than skipping it.
+- CI checks out Warden beside public Sinal, HTTP Gun, Relay and JSON Blueprint at the full revisions in `sibling-revisions.txt`. Checkouts use the ordinary workflow token with read-only repository permissions and do not persist credentials. Fork pull requests run the same verification jobs.
 
 | Obligation and authority                                                        | Reproducible command                                                                                  | Cadence and owner                          | Enforcement and retained evidence                                                          |
 | ------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------- | ------------------------------------------ | ------------------------------------------------------------------------------------------ |

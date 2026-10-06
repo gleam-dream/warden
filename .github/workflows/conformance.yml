@@ -31,10 +31,6 @@ jobs:
           path: warden
           persist-credentials: false
       - uses: ./warden/.github/actions/siblings
-        with:
-          client-id: ${{ vars.SIBLINGS_APP_CLIENT_ID }}
-          private-key: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.head.repo.fork) && secrets.SIBLINGS_APP_PRIVATE_KEY || '' }}
-          read-token: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.head.repo.fork) && secrets.SIBLINGS_READ_TOKEN || '' }}
       - uses: cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24 # v31
         with:
           extra_nix_config: experimental-features = nix-command flakes
