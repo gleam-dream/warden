@@ -98,6 +98,7 @@ pub opaque type ProviderOptions {
     scopes: List(String),
     login: LoginDecision,
     granted_scopes: Dict(String, List(String)),
+    email_claims: Dict(String, EmailClaims),
   )
 }
 
@@ -128,6 +129,7 @@ pub fn provider_options() -> ProviderOptions {
     scopes: ["openid", "email", "profile"],
     login: SignIn("test-user"),
     granted_scopes: dict.new(),
+    email_claims: dict.new(),
   )
 }
 
@@ -137,6 +139,27 @@ pub fn with_login(
   decision: LoginDecision,
 ) -> ProviderOptions {
   ProviderOptions(..options, login: decision)
+}
+
+/// Typed standard email claims. None omits that claim entirely. These are
+/// provider assertions, not permission or email-format validation.
+pub type EmailClaims {
+  EmailClaims(email: Option(String), verified: Option(Bool))
+}
+
+/// Override only email claims for one subject in newly issued ID tokens and
+/// userinfo. Without an override, the provider retains subject-derived email,
+/// verified in ID tokens and no verification claim in userinfo.
+/// Reserved protocol claims, identity constructors and production trust are unchanged.
+pub fn with_email_claims(
+  options: ProviderOptions,
+  subject: String,
+  claims: EmailClaims,
+) -> ProviderOptions {
+  ProviderOptions(
+    ..options,
+    email_claims: dict.insert(options.email_claims, subject, claims),
+  )
 }
 
 /// The scopes a login of `subject` is granted, in place of the scopes the
@@ -409,6 +432,18 @@ pub fn set_access_token_audiences(
 pub fn set_login(provider: Provider, decision: LoginDecision) -> Nil {
   transact(provider.state, fn(s) {
     #(State(..s, options: ProviderOptions(..s.options, login: decision)), Nil)
+  })
+}
+
+/// Change one subject's assertions for future ID tokens and userinfo reads.
+/// Previously issued tokens and verified identities remain unchanged.
+pub fn set_email_claims(
+  provider: Provider,
+  subject: String,
+  claims: EmailClaims,
+) -> Nil {
+  transact(provider.state, fn(s) {
+    #(State(..s, options: with_email_claims(s.options, subject, claims)), Nil)
   })
 }
 
@@ -1418,15 +1453,36 @@ fn id_token(state: State, grant: CodeGrant) -> String {
     [
       #("nonce", json.string(grant.nonce)),
       #("auth_time", json.int(grant.auth_time)),
-      #("email", json.string(grant.subject <> "@example.test")),
-      #("email_verified", json.bool(True)),
     ]
+    |> list.append(email_fields(state.options, grant.subject, Some(True)))
     |> list.fold(claims, fn(claims, pair) {
       let assert Ok(claims) = jwt.with_claim(claims, key: pair.0, value: pair.1)
       claims
     })
   let assert Ok(signed) = jwt.sign(es256(), claims, key)
   jwt.serialize(signed)
+}
+
+fn email_fields(
+  options: ProviderOptions,
+  subject: String,
+  default_verified: Option(Bool),
+) -> List(#(String, json.Json)) {
+  let claims =
+    dict.get(options.email_claims, subject)
+    |> result.unwrap(EmailClaims(
+      Some(subject <> "@example.test"),
+      default_verified,
+    ))
+  let fields = case claims.email {
+    Some(email) -> [#("email", json.string(email))]
+    None -> []
+  }
+  case claims.verified {
+    Some(verified) ->
+      list.append(fields, [#("email_verified", json.bool(verified))])
+    None -> fields
+  }
 }
 
 fn access_claims_json(claims: AccessClaims) -> List(#(String, json.Json)) {
@@ -1513,17 +1569,18 @@ fn userinfo_endpoint(
   let found =
     transact(state, fn(s) {
       let s = count(s, fn(c) { RequestCounts(..c, userinfo: c.userinfo + 1) })
-      #(s, live_access(s, bearer(request)))
+      let fields =
+        live_access(s, bearer(request))
+        |> result.map(fn(claims) {
+          [
+            #("sub", json.string(claims.subject)),
+            ..email_fields(s.options, claims.subject, None)
+          ]
+        })
+      #(s, fields)
     })
   case found {
-    Ok(claims) ->
-      json_response(
-        200,
-        json.object([
-          #("sub", json.string(claims.subject)),
-          #("email", json.string(claims.subject <> "@example.test")),
-        ]),
-      )
+    Ok(fields) -> json_response(200, json.object(fields))
     Error(Nil) -> oauth_error(401, "invalid_token")
   }
 }

@@ -6,6 +6,38 @@
 - Run `nix run .#design-gate-render -- docs/design docs/design/design-layer.pdf`, then `nix run .#design-gate-check -- docs/design .` after editing design sources or ADRs. Estimate context with `nix run .#design-gate-context -- docs/design --estimate`; use the manifest and digest to select a section.
 - Use `warden/testing` for explicitly trusted local HTTPS issuer scripts and `testing.check_store` for the general CAS port. Deployment adapters still require database-specific lock, crash, durability and rollback tests.
 
+## Script email evidence
+
+The local issuer can model absent or unverified contact evidence without bypassing
+login verification or constructing a verified identity:
+
+```gleam
+import gleam/option.{None, Some}
+import warden/testing
+
+let options =
+  testing.provider_options()
+  |> testing.with_email_claims(
+    "ada",
+    testing.EmailClaims(Some("ada@example.test"), Some(False)),
+  )
+
+// After starting the provider, omit both claims in future evidence.
+testing.set_email_claims(provider, "ada", testing.EmailClaims(None, None))
+```
+
+An explicit override applies to that subject's new ID tokens and userinfo responses. Email
+and verification are independently optional: None omits the JSON field rather
+than emitting null, and Some(False) remains false. Unusual strings are preserved
+so relying parties can test their own validation policy.
+
+Subjects without an override retain the original defaults: subject-derived email
+and verified true in ID tokens; subject-derived email with no verification field
+in userinfo. Runtime updates do not alter already signed tokens or immutable
+verified identities, and do not change the subject's stable identity key. This
+API does not override reserved protocol claims or grant application permission.
+The ordinary explicit local-provider trust and lifetime rules still apply.
+
 ## Provider and oracle suites
 
 ```sh
