@@ -46,7 +46,7 @@ start(CertName, Handler, _Opts) ->
 
 stop(#{acceptor := Acceptor, listen := Listen}) ->
     exit(Acceptor, kill),
-    catch ssl:close(Listen),
+    try ssl:close(Listen) catch _:_ -> ok end,
     ok.
 
 port(#{port := Port}) -> Port.
@@ -88,7 +88,12 @@ serve(Transport, Handler, Owner, Ref) ->
                 _ ->
                     ok
             end,
-            catch ssl:close(Socket);
+            try ssl:close(Socket)
+            catch
+                throw:Reason -> Reason;
+                exit:Reason -> {'EXIT', Reason};
+                error:Reason:Stack -> {'EXIT', {Reason, Stack}}
+            end;
         _ ->
             ok
     end.

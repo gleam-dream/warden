@@ -202,7 +202,10 @@ down(Pid, Timeout) ->
     after Timeout -> demonitor(Ref, [flush]), error({worker_still_alive, Pid}) end.
 stop(Pid, Reason) ->
     Ref = monitor(process, Pid),
-    case Reason of normal -> catch sys:terminate(Pid, normal, 5000); _ -> exit(Pid, Reason) end,
+    case Reason of
+        normal -> try sys:terminate(Pid, normal, 5000) catch _:_ -> ok end;
+        _ -> exit(Pid, Reason)
+    end,
     receive {'DOWN', Ref, process, Pid, _} -> ok after 6000 -> error(owner_did_not_stop) end.
 
 %% Fixed local microbenchmark, deliberately outside the correctness gate.
@@ -359,7 +362,7 @@ obsolete_completion_cannot_settle_new_refresh_test() ->
             {ok, FirstSnapshot} = result(First),
             Completion = receive {trace, Guardian, send, Message, Cache} -> Message
                          after 1000 -> error(no_completion) end,
-            catch erlang:trace(Guardian, false, [send]),
+            try erlang:trace(Guardian, false, [send]) catch _:_ -> ok end,
             warden@testing:rotate_signing_key(Test),
             warden@testing:rotate_signing_key(Test),
             with_barrier(fun(_) ->
@@ -468,7 +471,10 @@ obsolete_down_cannot_release_new_refresh_test() ->
                     {ok, NextSnapshot} = result(Next),
                     ?assertNotEqual(FirstSnapshot, NextSnapshot)
                 end)
-            after catch sys:resume(Cache), catch erlang:trace(Cache, false, ['receive']) end
+            after
+                try sys:resume(Cache) catch _:_ -> ok end,
+                try erlang:trace(Cache, false, ['receive']) catch _:_ -> ok end
+            end
         end)
     end).
 
@@ -557,7 +563,7 @@ queued_completion_after_owner_exit_has_no_named_send_panic_test() ->
                 after 1000 -> error(late_completion_guardian_still_alive) end,
                 result(Caller)
             after
-                catch erlang:resume_process(Guardian),
+                try erlang:resume_process(Guardian) catch _:_ -> ok end,
                 exit(Guardian, kill),
                 demonitor(GuardianRef, [flush]),
                 demonitor(WorkerRef, [flush])

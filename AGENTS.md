@@ -13,11 +13,11 @@ and unresolved authority/evidence obligations. Recording a gap does not resolve 
 
 ## Tooling
 
-- `nix develop` (or direnv): dev shell with `gleam`, Erlang/OTP 28, `rebar3`, `lefthook`.
+- `nix develop` (or direnv): dev shell with `gleam`, Erlang/OTP 29, `rebar3`, `lefthook`.
 - `nix fmt`: formats the whole repo via treefmt (`gleam format`, `nixfmt`, `prettier`).
 - `lefthook`: pre-commit hook formats staged files and re-stages them.
 - `nix flake check`: fails iff the tree is not formatted (plus any existing checks).
-- `gleam test`: runs the test suite.
+- `gleam test`: runs the test suite after the [fresh root build sequence](docs/TESTING.md#fresh-root-builds-on-otp-29), which scopes the frozen JOSE oracle compiler option to its build.
 
 <!-- agent-skills:begin -->
 <!-- framework-commit: cab7c0590036edaa66d8430cc5016399a9fd2c71 origin: git@github.com:lostbean/skills.git -->

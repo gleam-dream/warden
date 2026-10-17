@@ -54,7 +54,13 @@ reason_tag(_) -> "other".
 
 wait(_, 0) -> error(not_ready);
 wait(Name, N) ->
-    case catch oidcc_provider_configuration_worker:get_jwks(Name) of
+    Keys = try oidcc_provider_configuration_worker:get_jwks(Name)
+    catch
+        throw:Reason -> Reason;
+        exit:Reason -> {'EXIT', Reason};
+        error:Reason:Stack -> {'EXIT', {Reason, Stack}}
+    end,
+    case Keys of
         undefined -> timer:sleep(50), wait(Name, N - 1);
         {'EXIT', _} -> timer:sleep(50), wait(Name, N - 1);
         _ -> ok

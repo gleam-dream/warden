@@ -6,6 +6,28 @@
 - Run `nix run .#design-gate-render -- docs/design docs/design/design-layer.pdf`, then `nix run .#design-gate-check -- docs/design .` after editing design sources or ADRs. Estimate context with `nix run .#design-gate-context -- docs/design --estimate`; use the manifest and digest to select a section.
 - Use `warden/testing` for explicitly trusted local HTTPS issuer scripts and `testing.check_store` for the conditional-write port. Deployment adapters still require database-specific lock, crash, durability and rollback tests. Include a wait crossing the guarded deadline and a lost commit acknowledgement; the generic checker cannot create a database lock wait.
 
+## Fresh root builds on OTP 29
+
+- The frozen test-only JOSE 1.11.12 oracle uses unary `catch`, which OTP 29
+  deprecates. Its warnings-as-errors build requires the scoped compiler option
+  below; the pin and upstream source remain unchanged.
+- Run this sequence inside `nix develop` for a fresh root build and fast tests.
+  The option applies only to `gleam build`; the authored Erlang check and tests
+  run without it.
+
+```sh
+ERL_COMPILER_OPTIONS='[nowarn_deprecated_catch]' gleam build --warnings-as-errors
+scripts/erlang-check
+WARDEN_SUITE=fast gleam test
+```
+
+- `scripts/check`, `scripts/provider-check` and `scripts/benchmark` apply the
+  scoped build and unflagged authored Erlang check before their selected tests
+  or measurements. Separate consumers do not inherit the root's test-only
+  oracle and need no compiler option.
+- Do not export the option in the shell. `scripts/erlang-check` must retain
+  `erlc -Werror` for authored Erlang, including deprecated unary `catch`.
+
 ## Conditional-write evidence
 
 - `check_store` checks all three conditions, exact retained bytes and metadata on
@@ -86,18 +108,18 @@ scripts/conformance
 - CI checks out Warden beside public Sinal, HTTP Gun, Relay and JSON Blueprint at the full revisions in `sibling-revisions.txt`. Checkouts use the ordinary workflow token with read-only repository permissions and do not persist credentials. Fork pull requests run the same verification jobs.
 - CI caches Hex package archives and compiler-produced path dependency fingerprints. It does not cache compiled output. Dependency preparation retries explicit Hex rate limits at most three times; other dependency failures stop the gate. Compiler and test failures are not retried.
 
-| Obligation and authority                                                        | Reproducible command                                                                                  | Cadence and owner                          | Enforcement and retained evidence                                                          |
-| ------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------- | ------------------------------------------ | ------------------------------------------------------------------------------------------ |
-| Authored formatting; agent tooling instructions                                 | `nix flake check`                                                                                     | Local gate / mandatory CI                  | Mechanism; formatter diagnostics                                                           |
-| Workflow, POSIX shell and JavaScript syntax                                     | `scripts/scriptlint`                                                                                  | Local gate / mandatory CI                  | Partial static correctness; actionlint, ShellCheck and Node diagnostics                    |
-| Gleam build and authored Erlang warnings; Testing and retained capability scope | `gleam build --warnings-as-errors`, `scripts/erlang-check` in root and consumer                       | Local gate / mandatory CI                  | Mechanism for compiler diagnostics; warning rejection control                              |
-| Native attacks, races, redaction and lifecycle; threat/authority coverage       | `WARDEN_SUITE=fast gleam test`                                                                        | Local gate / mandatory CI                  | Bounded runtime evidence; nonempty known suite selection                                   |
-| Opaque constructors and public composition; test/extension ports                | `scripts/negative`, consumer build/tests, `scripts/relay-recipe`                                      | Local gate / mandatory CI                  | Compiler rejection plus positive control; public runtime and documentation recipe equality |
-| Gate refusal semantics                                                          | `scripts/gate-regressions` and suite-runner EUnit tests                                               | Local gate / mandatory CI                  | Mechanism; warnings, malformed/empty outcomes, exact known non-pass policy                 |
-| Native design integrity; agent design-gate instructions                         | `nix run .#design-gate-check -- docs/design .`                                                        | Local gate / mandatory CI                  | Mechanism for freshness, vocabulary and layer integrity                                    |
-| Independent providers; evidence/release conditions                              | `scripts/provider-check node`, `keycloak`, `interop`, `browser`                                       | Relevant changes / daily / full local gate | Bounded interoperability and browser evidence; logs and browser JSON                       |
-| Selected OpenID plans; ADR 0008                                                 | `WARDEN_CONFORMANCE_POLICY=regression scripts/conformance-check basic,formpost,config,refresh,logout` | Manual OpenID workflow / release selection | Bounded regression evidence; raw module logs and explicit acceptance summary               |
-| Cache/resource costs; ADR 0007                                                  | `scripts/benchmark`                                                                                   | Optional manual benchmark workflow         | Observations only; environment and measurements, no latency threshold                      |
+| Obligation and authority                                                        | Reproducible command                                                                                     | Cadence and owner                          | Enforcement and retained evidence                                                          |
+| ------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- | ------------------------------------------ | ------------------------------------------------------------------------------------------ |
+| Authored formatting; agent tooling instructions                                 | `nix flake check`                                                                                        | Local gate / mandatory CI                  | Mechanism; formatter diagnostics                                                           |
+| Workflow, POSIX shell and JavaScript syntax                                     | `scripts/scriptlint`                                                                                     | Local gate / mandatory CI                  | Partial static correctness; actionlint, ShellCheck and Node diagnostics                    |
+| Gleam build and authored Erlang warnings; Testing and retained capability scope | [Root build sequence](#fresh-root-builds-on-otp-29); unflagged consumer build and `scripts/erlang-check` | Local gate / mandatory CI                  | Mechanism for compiler diagnostics; warning rejection control                              |
+| Native attacks, races, redaction and lifecycle; threat/authority coverage       | `WARDEN_SUITE=fast gleam test`                                                                           | Local gate / mandatory CI                  | Bounded runtime evidence; nonempty known suite selection                                   |
+| Opaque constructors and public composition; test/extension ports                | `scripts/negative`, consumer build/tests, `scripts/relay-recipe`                                         | Local gate / mandatory CI                  | Compiler rejection plus positive control; public runtime and documentation recipe equality |
+| Gate refusal semantics                                                          | `scripts/gate-regressions` and suite-runner EUnit tests                                                  | Local gate / mandatory CI                  | Mechanism; warnings, malformed/empty outcomes, exact known non-pass policy                 |
+| Native design integrity; agent design-gate instructions                         | `nix run .#design-gate-check -- docs/design .`                                                           | Local gate / mandatory CI                  | Mechanism for freshness, vocabulary and layer integrity                                    |
+| Independent providers; evidence/release conditions                              | `scripts/provider-check node`, `keycloak`, `interop`, `browser`                                          | Relevant changes / daily / full local gate | Bounded interoperability and browser evidence; logs and browser JSON                       |
+| Selected OpenID plans; ADR 0008                                                 | `WARDEN_CONFORMANCE_POLICY=regression scripts/conformance-check basic,formpost,config,refresh,logout`    | Manual OpenID workflow / release selection | Bounded regression evidence; raw module logs and explicit acceptance summary               |
+| Cache/resource costs; ADR 0007                                                  | `scripts/benchmark`                                                                                      | Optional manual benchmark workflow         | Observations only; environment and measurements, no latency threshold                      |
 
 - Nix pins all tooling through `flake.lock`. The formatter excludes frozen evidence receipts, vendored upstream Compose/oracle records, deliberate negative compiler fixtures and generated output. Erlang warning checks compile authored helpers with `erlc -Werror` after Gleam resolves their dependencies; generated and upstream Erlang retain their own owners. Fault-test runtime reports are not parsed as compiler warnings.
 - OpenID verdicts default to strict: every selected module must finish PASSED. Regression mode permits only the exact SKIPPED unsigned-token and REVIEW logout outcomes in `test/conformance/known-outcomes.json`; these remain non-pass evidence. Third-party interruption, unknown outcomes, driver errors, missing modules, malformed evidence and empty selections fail both policies. The manual workflow defaults to the five retained regression plans; thirdparty is selectable and retains its unresolved independent evidence. Neither policy confers certification.

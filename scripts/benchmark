@@ -3,7 +3,8 @@
 set -eu
 ROOT=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
 cd "$ROOT"
-gleam build --warnings-as-errors
+# Frozen test-only JOSE 1.11.12 uses unary catch; authored Erlang stays strict below.
+ERL_COMPILER_OPTIONS='[nowarn_deprecated_catch]' gleam build --warnings-as-errors
 scripts/erlang-check
 mkdir -p build/benchmark
 { git rev-parse HEAD; gleam --version; erl +S 4 -noshell -eval 'io:format("OTP=~s schedulers=~p~n", [erlang:system_info(otp_release), erlang:system_info(schedulers_online)]), halt().'; uname -a; } > build/benchmark/environment.txt

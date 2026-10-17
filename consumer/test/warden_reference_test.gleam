@@ -25,7 +25,8 @@ pub fn main() -> Nil {
   gleeunit.main()
 }
 
-const es256_key = "{\"kty\":\"EC\",\"crv\":\"P-256\",\"kid\":\"app-key-1\",\"x\":\"f83OJ3D2xF1Bg8vub9tLe1gHMzV76e8Tus9uPHvRVEU\",\"y\":\"x_FEzRu9m36HLN_tue659LNpXW6pCyStikYjKIWI5a0\",\"d\":\"jpsQnnGQmL-YBIffH1136cspYG6-0iY7X1fCE9-E9LI\"}"
+const es256_key =
+  "{\"kty\":\"EC\",\"crv\":\"P-256\",\"kid\":\"app-key-1\",\"x\":\"f83OJ3D2xF1Bg8vub9tLe1gHMzV76e8Tus9uPHvRVEU\",\"y\":\"x_FEzRu9m36HLN_tue659LNpXW6pCyStikYjKIWI5a0\",\"d\":\"jpsQnnGQmL-YBIffH1136cspYG6-0iY7X1fCE9-E9LI\"}"
 
 /// The common path: configure, start, sign in, call an API with the token
 /// (refreshed near expiry), sign out with revocation.
