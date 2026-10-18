@@ -1,0 +1,9 @@
+# Mandatory CI runs the canonical local gate on the locked dependencies
+
+<a id="adr-0015"></a>
+
+- **Decision:** the mandatory CI workflow runs the same `scripts/check` gate a developer runs locally, on pull requests and pushes to `main`. Warden declares its unpublished sibling packages (Sinal, HTTP Gun, Relay and JSON Blueprint) as Git dependencies on `main`, and each `manifest.toml` records the resolved commit. CI therefore builds exactly the locked revisions and checks no sibling repository out. Provider evidence runs separately on relevant source, fixture and toolchain changes, daily, and on request.
+- **Need:** a failing gate must be reproducible, and a CI-only command set would let local and CI results diverge. A branch name alone is not reproducible; the manifest lock supplies the revision.
+- **Alternatives:** a commit hash in every `gleam.toml`, repeated in a revisions list and in CI checkouts, keeps one fact in several places that drift apart. Tracking branches without a lock gives no reproducible result. Vendoring siblings duplicates their source and design layers. A separate CI command list drifts from the local gate.
+- **Consequences:** a sibling change reaches Warden only when `gleam update <package>` is run by hand and the changed manifest passes the gate. No workflow or script moves a sibling. Workflows use read-only repository permissions and persist no credentials, so fork pull requests run the same verification. CI caches Hex archives and path-dependency fingerprints but no compiled output. Dependency preparation retries explicit Hex rate limits at most three times, and compiler and test failures are never retried. Each workflow retains the Warden commit and the locked sibling commits in `build/ci/revisions.txt`.
+- **Evidence limits:** CI status evidences the gate at the locked revisions. It does not qualify other sibling revisions, provider interoperability or release certification.

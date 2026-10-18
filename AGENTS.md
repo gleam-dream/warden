@@ -13,6 +13,7 @@
 - `nix fmt`: formats the whole repo via treefmt (`gleam format`, `nixfmt`, `prettier`).
 - `lefthook`: pre-commit hook formats staged files and re-stages them.
 - `nix flake check`: fails iff the tree is not formatted (plus any existing checks).
+- Unpublished sibling packages (Sinal, HTTP Gun, Relay, JSON Blueprint) are Git dependencies with `ref = "main"`, and each `manifest.toml` is the lock. Update one by hand with `gleam update <package>`; no workflow or script moves a dependency (ADR 0015).
 
 ## Gates and tests
 

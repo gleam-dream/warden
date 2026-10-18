@@ -8,7 +8,7 @@ permission checks.
 ## Installation
 
 This checkout is unreleased and pre-production. It requires Gleam 1.18 or later
-and uses immutable Git dependencies on HTTP Gun and Sinal. Gleam fetches them
+and uses Git dependencies on the `main` branches of HTTP Gun and Sinal, locked in `manifest.toml`. Gleam fetches them
 automatically. For local development, add a Warden checkout to your application's
 `gleam.toml` (adjust the path for your directory layout):
 

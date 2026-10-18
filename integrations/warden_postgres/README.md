@@ -29,4 +29,4 @@ nix develop --command scripts/postgres-check
 ```
 
 The script creates and removes its own temporary PostgreSQL cluster. Gleam fetches
-HTTP Gun and Sinal from the immutable Git revisions in `gleam.toml`.
+HTTP Gun and Sinal from the Git dependencies in `gleam.toml`, at the commits locked in `manifest.toml`.

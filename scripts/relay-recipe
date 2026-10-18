@@ -2,7 +2,7 @@
 # Compiles the Relay verifier recipe verbatim and runs it through Relay.
 # Warden does not depend on Relay, so the recipe lives in README.md (after `<!-- relay-recipe -->`) and
 # is compiled by relay_consumer/, a separate package that depends on Warden
-# and Relay by path. The module doc of src/warden/resource.gleam must carry
+# by path and Relay as a Git dependency. The module doc of src/warden/resource.gleam must carry
 # the same code.
 #   nix develop -c scripts/relay-recipe
 set -eu
