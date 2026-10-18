@@ -40,6 +40,12 @@
   pending-entry(title: "Choose kid-less rotation availability policy", kind: "ruling", since: "2026-10-06", adr: [#adr(8)])[
     A kid-less wrong-key signature can report bad signature without a key refresh. Refreshing on that failure needs an explicit bounded policy and attacker-load evidence.
   ],
+  pending-entry(title: "Check claims carried over from retired guides against code", kind: "verify", since: "2026-10-17")[
+    The public modules, public defaults and setters, application responsibilities, validation gates, dependency provenance and benchmark method sections state facts that earlier guides held. A grep of the source and a run of the gates has not yet confirmed every default value, setter name and responsibility clause.
+  ],
+  pending-entry(title: "Retain the upstream location of the oidcc conformance harness", kind: "verify", since: "2026-10-17")[
+    The oracle record pins the harness the differential corpus follows by revision and licence, and keeps no upstream location. Recover the location and record it beside the pin.
+  ],
 )
 #section(title: "System at a glance", lead: "One Warden context owns protocol and custody; its neighbors retain distinct authorities.", visual: diagram(
   altitude: "L1", viewpoint: "context-ownership", title: "Authentication and authorization owners",
