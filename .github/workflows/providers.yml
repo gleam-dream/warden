@@ -1,7 +1,7 @@
 name: Provider evidence
 on:
   push:
-    branches: [master]
+    branches: [main]
     paths:
       [
         "src/**",

@@ -14,7 +14,7 @@ or record operations can perform database work.
 The initial adapter exposed its configuration record constructor. Consumers could
 therefore depend on its complete representation, making future defaulted settings
 a source compatibility change. Opaque configuration follows the ecosystem's
-[caller contract](https://github.com/gleam-dream/oversight/blob/master/docs/adr/0002-preserve-caller-owned-values-and-decisions.md).
+[caller contract](https://github.com/gleam-dream/oversight/blob/main/docs/adr/0002-preserve-caller-owned-values-and-decisions.md).
 
 Schema and server time limits remain explicit caller choices. The adapter still
 borrows the caller's named pool, and its timeout settings do not replace Warden's
