@@ -1,6 +1,10 @@
-//// The README's common path, compiled with the consumer package so the
-//// documentation cannot drift from the API. Keep the two in step.
+//// Usage: sign a user in, call an API with the token, sign out.
+////
+//// The README shows this region verbatim (`scripts/check-doc-examples`
+//// compares them), and `common_path_test` runs the path against the local
+//// test provider, so the documentation cannot drift from the API.
 
+// docs:begin login
 import gleam/http/request.{type Request}
 import gleam/http/response.{type Response}
 import gleam/result
@@ -70,3 +74,4 @@ pub fn logout(
     _ -> response.new(303) |> response.set_header("location", "/")
   }
 }
+// docs:end login
