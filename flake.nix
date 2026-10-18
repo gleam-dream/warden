@@ -55,8 +55,6 @@
             "**/*.pdf"
             ".render/**"
             "docs/evidence/**" # Frozen regression receipts retain their original bytes.
-            "test/conformance/docker-compose-prebuilt.upstream.yml" # Vendored upstream input.
-            "test/integration/oidcc_records.hrl" # Pinned oracle record declarations.
             "test_negative/**" # Deliberately invalid compiler fixtures.
           ];
           programs.gleam.enable = true;

@@ -30,8 +30,16 @@ resolution or fixture pin.
 
 Runtime JOSE is gose and kryptos and runtime HTTPS is HTTP Gun. oidcc, erlang-jose
 and telemetry_registry are development oracles; an application does not install
-them by using Warden. The OpenID suite fixture keeps its licence and attribution
-beside the vendored compose files.
+them by using Warden.
+
+No upstream input is committed. `scripts/conformance-suite` fetches the suite's
+`docker-compose-prebuilt.yml` at tag `release-v5.3.1` from
+<https://gitlab.com/openid/conformance-suite/-/raw/release-v5.3.1/docker-compose-prebuilt.yml>
+into `build/oracle-inputs/` and stops unless its sha256 is
+`c80e417b2a0c735e595dd49e6cd95fc43a75b692389016ddb863c4539e41d330`. The oidcc
+record declarations used by the raw probes come from the oidcc development
+dependency (`-include_lib("oidcc/include/...")`). Container images are pulled by
+the digests above.
 
 ## What each comparison establishes
 

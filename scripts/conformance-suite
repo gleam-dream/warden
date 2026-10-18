@@ -1,13 +1,38 @@
 #!/bin/sh
 # Start or stop the pinned OpenID conformance suite (release-v5.3.1, dev mode)
 # with a certificate from the disposable test CA.
-#   scripts/conformance-suite up | down
+#   scripts/conformance-suite up | down | logs
+# The suite's compose file is fetched from the pinned upstream tag into build/
+# and checked against its recorded digest; it is never committed (docs/ORACLE.md).
 set -eu
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 export IMAGE_TAG=release-v5.3.1
-COMPOSE="docker compose -p warden-conformance -f $ROOT/test/conformance/docker-compose-prebuilt.upstream.yml -f $ROOT/test/conformance/compose.override.yml"
+SUITE_COMPOSE_URL="https://gitlab.com/openid/conformance-suite/-/raw/$IMAGE_TAG/docker-compose-prebuilt.yml"
+SUITE_COMPOSE_SHA256=c80e417b2a0c735e595dd49e6cd95fc43a75b692389016ddb863c4539e41d330
+SUITE_COMPOSE="$ROOT/build/oracle-inputs/conformance-suite-$IMAGE_TAG-docker-compose-prebuilt.yml"
+
+fetch_compose() {
+  if [ -f "$SUITE_COMPOSE" ] && [ "$(sha256sum "$SUITE_COMPOSE" | cut -d' ' -f1)" = "$SUITE_COMPOSE_SHA256" ]; then
+    return 0
+  fi
+  mkdir -p "$ROOT/build/oracle-inputs"
+  tmp=$(mktemp "$ROOT/build/oracle-inputs/compose.XXXXXX")
+  curl -fsSL "$SUITE_COMPOSE_URL" -o "$tmp"
+  actual=$(sha256sum "$tmp" | cut -d' ' -f1)
+  if [ "$actual" != "$SUITE_COMPOSE_SHA256" ]; then
+    rm -f "$tmp"
+    echo "conformance suite compose file at $IMAGE_TAG has sha256 $actual, expected $SUITE_COMPOSE_SHA256" >&2
+    exit 1
+  fi
+  chmod 644 "$tmp"
+  mv "$tmp" "$SUITE_COMPOSE"
+}
+
+# Relative paths in the override file resolve against test/conformance.
+COMPOSE="docker compose -p warden-conformance --project-directory $ROOT/test/conformance -f $SUITE_COMPOSE -f $ROOT/test/conformance/compose.override.yml"
 case "${1:-up}" in
   up)
+    fetch_compose
     "$ROOT/scripts/test-pki"
     $COMPOSE up -d --pull missing
     i=0
@@ -16,7 +41,7 @@ case "${1:-up}" in
     done
     echo "conformance suite ready: https://localhost.emobix.co.uk:8443"
     ;;
-  logs) $COMPOSE logs --no-color ;;
-  down) $COMPOSE down -v ;;
+  logs) fetch_compose; $COMPOSE logs --no-color ;;
+  down) fetch_compose; $COMPOSE down -v ;;
   *) echo "usage: $0 up|down|logs" >&2; exit 2 ;;
 esac
