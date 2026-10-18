@@ -21,5 +21,13 @@
   (slug: "term-access-claims", title: [Access claims], body: [An opaque checked JWT access-token view for one validator's issuer and resource policy. Application authorization remains a separate decision.]),
   (slug: "term-action", title: [Action], body: [The closed caller response classification Reauthenticate, RetryLater, Recover, FixConfiguration or RejectRequest. It classifies recovery meaning rather than generic retryability.]),
   (slug: "term-sealing-key-ring", title: [Sealing key ring], body: [One current AES-256-GCM key and retired keys permitted for opening older records. Its lifecycle is controlled by the application for durable stores.]),
+  (slug: "term-write-outcome", title: [Write outcome], body: [The confirmed result of a conditional record write: Written, VersionConflict or DeadlineElapsed. An unconfirmed result is a store error, never a write outcome.]),
+  (slug: "term-validity-deadline", title: [Validity deadline], body: [The wall-clock instant before which a guarded write may replace a record. It is independent of the record's retention expiry and of the acknowledgement time.]),
+  (slug: "term-relying-party", title: [Relying party], body: [The role that signs browser users in through authorization-code login and holds their token custody.]),
+  (slug: "term-service-client", title: [Service client], body: [The confidential role that obtains its own access tokens without a login redirect or a user session.]),
+  (slug: "term-resource-server", title: [Resource server], body: [The role that validates access tokens against one configured audience and holds no client identity, grants or introspection.]),
+  (slug: "term-public-origin", title: [Public origin], body: [The scheme, host and port at which browsers reach the application's login, callback and logout routes. Registered callback addresses are built from it.]),
+  (slug: "term-oracle", title: [Oracle], body: [A pinned independent implementation, token corpus or conformance suite whose behavior bounds a named Warden contract. It is never a runtime dependency and confers no certification.]),
+  (slug: "term-evidence-receipt", title: [Evidence receipt], body: [A retained raw output of one check run with its exact revisions. It bounds the claim it supports and neither certifies a release nor qualifies a later dependency resolution.]),
   (slug: "term-tombstone", title: [Tombstone], body: [A bounded terminal record preserving consumption or termination evidence after secret material is removed. It prevents replay and late installation recovery within its retention horizon.]),
 )

@@ -9,6 +9,8 @@ case "$PROFILE" in fast|full) ;; *) echo "usage: $0 [fast|full]" >&2; exit 2 ;; 
 nix flake check
 scripts/scriptlint
 python3 -B -m unittest discover -s scripts -p 'test_*.py'
+# README code blocks are verbatim regions of the compiled consumer examples.
+python3 -B scripts/check-doc-examples.py
 gleam format --check src test
 # Frozen test-only JOSE 1.11.12 uses unary catch; authored Erlang stays strict below.
 ERL_COMPILER_OPTIONS='[nowarn_deprecated_catch]' gleam build --warnings-as-errors

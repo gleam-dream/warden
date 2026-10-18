@@ -1,5 +1,5 @@
 //// Browser-facing protections of the reference relying party. Applications
-//// copying it should keep all of them (docs/APPLICATION-RESPONSIBILITIES.md).
+//// copying it should keep all of them (the design's Application responsibilities section).
 
 import gleam/http/cookie
 import gleam/http/request

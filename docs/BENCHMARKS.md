@@ -1,8 +1,15 @@
 # Warden benchmarks
 
 These local measurements were recorded on 2026-10-05. They describe the provider
-fetch-ownership change on one machine; they were not rerun for this documentation
-cleanup and are not deployment capacity guarantees.
+fetch-ownership change on one machine and are not deployment capacity guarantees.
+
+Scope: provider cache cost, token validation and key refresh. Correctness
+references and conformance receipts are in [ORACLE.md](ORACLE.md); both documents
+use the same local HTTPS provider fixtures. The design's
+[benchmark method](design/design.typ) states the rules, [ADR 0017](adr/0017-benchmarks-are-local-observations-without-thresholds.md)
+records why no result gates a change, and [`AGENTS.md`](../AGENTS.md) lists the
+commands. Raw output of a new run belongs beside its summary as a non-markdown
+file.
 
 The immutable [measurement receipt](https://github.com/gleam-dream/warden/blob/f3847d102c0db9f66e4d4a72a9c7b3028507c7ac/docs/PROGRESS.md#round-9-provider-fetch-ownership-2026-10-05)
 records the numbers and method. [ADR 0007](adr/0007-cache-incarnation-ownership.md)

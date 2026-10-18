@@ -5,7 +5,7 @@
 //// reach logs when an application prints a Warden value.
 ////
 //// This does not protect against VM introspection (`sys:get_state`, remote
-//// shells, crash dumps); see docs/APPLICATION-RESPONSIBILITIES.md.
+//// shells, crash dumps); see the design's Application responsibilities section.
 
 pub opaque type Redacted(a) {
   Redacted(reveal: fn() -> a)

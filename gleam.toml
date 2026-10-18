@@ -18,7 +18,7 @@ gleam_crypto = ">= 1.6.0 and < 2.0.0"
 gleam_time = ">= 1.11.0 and < 2.0.0"
 # Cryptographic backend. Warden uses only public gose and kryptos
 # APIs. The lower bounds are the versions the security evidence was recorded
-# on (docs/SUPPLY-CHAIN.md); a newer resolved version must pass the suites.
+# on (the design's dependency-provenance section); a newer resolved version must pass the suites.
 gose = ">= 2.2.0 and < 3.0.0"
 kryptos = ">= 1.5.0 and < 2.0.0"
 sinal = { git = "https://github.com/gleam-dream/sinal.git", ref = "9727f9baab6ed4f796780a0c3a1027c3292c5fc7" }

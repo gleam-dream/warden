@@ -85,7 +85,7 @@ pub type Config =
 
 /// A client secret, held in a closure: `string.inspect` and logs of a
 /// configuration show no secret. This does not protect against VM inspection
-/// or crash dumps; see docs/APPLICATION-RESPONSIBILITIES.md.
+/// or crash dumps; see the design's Application responsibilities section.
 pub opaque type Secret {
   Secret(reveal: fn() -> String)
 }

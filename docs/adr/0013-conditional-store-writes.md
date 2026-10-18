@@ -1,4 +1,4 @@
-# ADR 0013: One conditional write owns version and deadline admission
+# One conditional write owns version and deadline admission
 
 <a id="adr-0013"></a>
 

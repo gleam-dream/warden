@@ -2,14 +2,10 @@
 
 ## About this repo
 
-`warden` — A typed Gleam OIDC / OAuth 2.0 Relying Party on gose (JOSE) with HTTPS on HTTP Gun.
+`warden` — a typed Gleam OIDC / OAuth 2.0 relying party on gose (JOSE), with HTTPS on HTTP Gun. oidcc 3.9.0 is a test-only oracle.
 
-Builds on gose/kryptos and HTTP Gun. oidcc 3.9.0 is a test-only oracle.
-Read the [native design](docs/design/design.typ), [canonical vocabulary](docs/design/CONTEXT.typ)
-and [coverage map](docs/COVERAGE.md) before changing a public boundary.
-Consumer decisions are in [application responsibilities](docs/APPLICATION-RESPONSIBILITIES.md);
-current checks are in [testing](docs/TESTING.md). Preserve intended protocol capabilities
-and unresolved authority/evidence obligations. Recording a gap does not resolve it.
+- Read `docs/design/design.typ`, `docs/design/CONTEXT.typ` and `docs/COVERAGE.md` before changing a public boundary.
+- Preserve intended protocol capabilities and unresolved authority and evidence obligations. Recording a gap does not resolve it.
 
 ## Tooling
 
@@ -17,7 +13,23 @@ and unresolved authority/evidence obligations. Recording a gap does not resolve 
 - `nix fmt`: formats the whole repo via treefmt (`gleam format`, `nixfmt`, `prettier`).
 - `lefthook`: pre-commit hook formats staged files and re-stages them.
 - `nix flake check`: fails iff the tree is not formatted (plus any existing checks).
-- `gleam test`: runs the test suite after the [fresh root build sequence](docs/TESTING.md#fresh-root-builds-on-otp-29), which scopes the frozen JOSE oracle compiler option to its build.
+
+## Gates and tests
+
+- `nix develop -c scripts/check`: canonical fast gate (formatting, build warnings, local tests, negative compiler fixtures, both consumers, Relay recipe, PostgreSQL adapter, design gate). It needs no provider container or external issuer.
+- `nix develop -c scripts/check full`: adds the node, keycloak, interop and browser provider suites. It needs Docker Compose and Google Chrome.
+- Fresh root build on OTP 29: run `ERL_COMPILER_OPTIONS='[nowarn_deprecated_catch]' gleam build --warnings-as-errors`, then `scripts/erlang-check`, then `WARDEN_SUITE=fast gleam test`. Never export the option in the shell (ADR 0016).
+- Provider suites: `scripts/keycloak up`, `scripts/node-provider up`, `scripts/interop up` or `scripts/conformance-suite up`, then `WARDEN_SUITE=keycloak|node|interop gleam test`, `scripts/browser-journey` or `scripts/conformance`. Stop each fixture with its `down` command. A stale `build/node-provider.owner` or `build/hydra-consent.owner` directory is removed by hand only after inspection.
+- OpenID plans: `WARDEN_CONFORMANCE_POLICY=regression scripts/conformance-check basic,formpost,config,refresh,logout`.
+- `scripts/postgres-check` and `scripts/postgres-negative` run the PostgreSQL adapter against a temporary cluster. `scripts/relay-recipe` compiles the README Relay recipe and compares it with the `warden/resource` module doc.
+- `scripts/benchmark` produces observations only (ADR 0017). Ports 8443 and 19443 must be free for the conformance-driver and fixture-lifecycle gate checks.
+- Usage lives as compiled examples in `consumer/src/warden_reference/usage/`, run by `consumer/test/usage_test.gleam` inside `scripts/check`. `python3 -B scripts/check-doc-examples.py` fails when a README block differs from its marked `// docs:begin NAME` region. Change an example and its README block together; add no prose usage guide.
+- After editing design sources or ADRs, run the design-gate commands in the block below.
+
+## References
+
+- [`docs/ORACLE.md`](docs/ORACLE.md) pins the independent references Warden is compared with (OpenID Foundation RP suite `release-v5.3.1`, Keycloak, node-oidc-provider, Dex, Hydra, test-only oidcc and erlang-jose), what each comparison establishes and how to rerun it. Update it when a pin, fixture or result changes.
+- [`docs/BENCHMARKS.md`](docs/BENCHMARKS.md) retains the local measurements of provider cache cost, their method and limits. It links back to `docs/ORACLE.md`; a benchmark never gates a change.
 
 <!-- agent-skills:begin -->
 <!-- framework-commit: cab7c0590036edaa66d8430cc5016399a9fd2c71 origin: git@github.com:lostbean/skills.git -->
