@@ -13,4 +13,4 @@
 ## Adoption receipt provenance
 
 - The isolated 1 October 2026 experiment used HTTP Gun `369da4ffc2671c1dbc63e1ecd1355e8ca42e403e`, Sinal `8acec4507f23daa7f49c40cc7d39816a5a4c3d1d` and Warden `230c6bb`, with the node test correction described in the immutable report above. It retained Darwin ARM64/OTP output from transport/pool, framing/bounds, security and local provider checks. Its temporary adapter/probes were removed after the public port was adopted.
-- Raw logs remain in `docs/evidence/http-gun-adoption/logs/`. Inherited HTTP Gun matrices, H2/load results and other consumers were not rerun by this experiment and did not independently establish Warden compatibility. The old script paths and measured results are historical evidence, not current operating commands.
+- The raw logs of that experiment are retained in repository history at commit `afd4f25`. Inherited HTTP Gun matrices, H2/load results and other consumers were not rerun by this experiment and did not independently establish Warden compatibility. The old script paths and measured results are historical evidence, not current operating commands.

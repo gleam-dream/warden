@@ -89,15 +89,17 @@ conformance-driver and fixture-lifecycle gate checks.
 
 ## Receipts
 
-| Receipt                                                               | Contents                                                                                    |
-| --------------------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
-| [`evidence/conformance/`](evidence/conformance/README.md)             | `summary.json` and `run-log.txt` for the native backend; `history/` for the removed backend |
-| [`evidence/http-gun-adoption/`](evidence/http-gun-adoption/README.md) | Raw logs of the HTTP Gun adoption experiment (ADR 0002)                                     |
-| `evidence/browser-journey.json`, `evidence/history/`                  | Browser journey receipts                                                                    |
+| Receipt                                                   | Contents                                                      |
+| --------------------------------------------------------- | ------------------------------------------------------------- |
+| [`evidence/conformance/`](evidence/conformance/README.md) | `summary.json`, the outcomes of the native backend's last run |
+
+The conformance run log, the removed backend's receipts, the browser journey
+receipts and the raw logs of the HTTP Gun adoption experiment (ADR 0002) are
+retained in repository history at commit `afd4f25`.
 
 Retain a new result with the exact package, fixture, option and toolchain
 revisions, and keep skipped and human-review modules separate from passes. Never
-overwrite checked-in history. The retained 1 October 2026 conformance receipts
+overwrite checked-in history. The retained 1 October 2026 conformance summary
 recorded Basic and Form Post at 13 passed and one skipped each, Config at five
 passed and one skipped, refresh at three passed and RP logout at three
 review-needed modules.
