@@ -55,6 +55,7 @@
             "**/*.pdf"
             ".render/**"
             "docs/evidence/**" # Frozen regression receipts retain their original bytes.
+            "test/integration/oidcc_records.hrl" # Pinned oracle record declarations.
             "test_negative/**" # Deliberately invalid compiler fixtures.
           ];
           programs.gleam.enable = true;

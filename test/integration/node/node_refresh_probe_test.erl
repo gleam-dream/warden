@@ -4,9 +4,7 @@
 -module(node_refresh_probe_test).
 
 -include_lib("eunit/include/eunit.hrl").
--include_lib("oidcc/include/oidcc_provider_configuration.hrl").
--include_lib("oidcc/include/oidcc_client_context.hrl").
--include_lib("oidcc/include/oidcc_token.hrl").
+-include("../oidcc_records.hrl").
 
 -define(ISSUER, <<"https://localhost:19443">>).
 -define(CLIENT, <<"warden-rp">>).

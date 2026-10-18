@@ -14,7 +14,7 @@
 - `lefthook`: pre-commit hook formats staged files and re-stages them.
 - `nix flake check`: fails iff the tree is not formatted (plus any existing checks).
 - Unpublished sibling packages (Sinal, HTTP Gun, Relay, JSON Blueprint) are Git dependencies with `ref = "main"`, and each `manifest.toml` is the lock. Update one by hand with `gleam update <package>`; no workflow or script moves a dependency (ADR 0015).
-- Oracle inputs are fetched at run time into `build/oracle-inputs/` and checked against a recorded digest; no upstream file is committed (`docs/ORACLE.md`).
+- Oracle inputs are fetched at run time into `build/oracle-inputs/` and checked against a recorded digest; the one committed exception is `test/integration/oidcc_records.hrl` (`docs/ORACLE.md`).
 
 ## Gates and tests
 
