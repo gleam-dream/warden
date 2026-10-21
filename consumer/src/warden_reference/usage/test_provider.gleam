@@ -12,7 +12,7 @@ import gleam/option.{None, Some}
 import warden
 import warden/testing
 
-// docs:begin test-provider
+// snips-start: test-provider
 pub fn sign_in_then_refuse() -> Nil {
   let assert Ok(provider) =
     testing.start_provider(
@@ -34,7 +34,7 @@ pub fn sign_in_then_refuse() -> Nil {
   testing.stop_provider(provider)
 }
 
-// docs:end test-provider
+// snips-end: test-provider
 
 /// A request's `login_hint` picks the user per login. `with_granted_scopes`
 /// replaces the scopes a login is granted, so a test can sign in a user who

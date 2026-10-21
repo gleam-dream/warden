@@ -13,7 +13,7 @@ import warden
 import warden/config
 import warden/testing
 
-// docs:begin callback-addresses
+// snips-start: callback-addresses
 const admin_callback = "https://admin.example.com/callback"
 
 pub fn allow_admin_callback(configuration: config.Config) -> config.Config {
@@ -34,7 +34,7 @@ pub fn admin_login(
   warden.begin_login(client, req, options)
 }
 
-// docs:end callback-addresses
+// snips-end: callback-addresses
 
 /// A login completes at the chosen callback address; a near miss such as a
 /// trailing slash is refused before any provider request.

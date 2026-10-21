@@ -2,7 +2,7 @@
 ////
 //// `common_path_test` exercises this path against the local test provider.
 
-// docs:begin login
+// snips-start: login
 import gleam/http/request.{type Request}
 import gleam/http/response.{type Response}
 import gleam/result
@@ -72,4 +72,4 @@ pub fn logout(
     _ -> response.new(303) |> response.set_header("location", "/")
   }
 }
-// docs:end login
+// snips-end: login

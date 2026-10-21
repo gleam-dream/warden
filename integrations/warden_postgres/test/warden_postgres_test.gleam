@@ -83,12 +83,14 @@ pub fn login_survives_a_new_client_and_logout_revokes_the_reference_test() -> Ni
   let assert Ok(provider) = testing.start_provider(testing.provider_options())
   use <- exception.defer(fn() { testing.stop_provider(provider) })
   let assert Ok(key) = config.sealing_key(crypto.strong_random_bytes(32))
+  // snips-start: configure-client
   let records = warden_postgres.records(adapter(db))
   let config =
     testing.config(provider, "https://app.test/callback")
     |> config.with_custody_store(records)
     |> config.with_transaction_store(records)
     |> config.with_sealing_key(key)
+  // snips-end: configure-client
   let assert Ok(first) = warden.new(config)
   let reference = {
     use <- exception.defer(fn() { warden.stop(first) })
@@ -144,6 +146,7 @@ fn adapter(name: process.Name(pog.Message)) -> warden_postgres.Adapter {
 
 pub fn isolated_quoted_schema_survives_reinitialization_test() -> Nil {
   use name <- database
+  // snips-start: configure-adapter
   let config = warden_postgres.config(name)
   let assert Ok(isolated) =
     warden_postgres.new(
@@ -153,6 +156,7 @@ pub fn isolated_quoted_schema_survives_reinitialization_test() -> Nil {
     )
   let assert Ok(Nil) = warden_postgres.initialize(isolated)
   let records = warden_postgres.records(isolated)
+  // snips-end: configure-adapter
   let record =
     store.Record("isolated", -1, timestamp.from_unix_seconds(0), <<255, 0>>)
   store.put(records, record, store.Absent) |> should.equal(Ok(store.Written))

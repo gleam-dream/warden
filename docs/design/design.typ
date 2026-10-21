@@ -394,7 +394,7 @@
     #points([Release acceptance requires no vulnerable/unreviewed dependency, no owned-facade failure, no unexplained differential, no selected conformance regression, no failing attack requirement and no supported-provider interoperability failure. Independent review and release SBOM remain obligations.], [Raw license notices, vendor record declarations, lockfiles, provider image/schema fixtures, receipt JSON/logs and executable probes remain intact. ADRs carry provenance and interpretation rather than rerun diaries. The pins, comparison classification, deliberate differences and reproduction commands are in #lnk("../ORACLE.md")[ORACLE.md]. #adr(8)])
   ]
   #subsection(title: "Validation gates and continuous integration")[
-    #points([Required checks cover formatting, compilation and unit/integration behavior. README equality, source-policy audits, gate self-tests and repository-local design checkers are removed; the imported design check remains. Documentation and conventions are reviewed manually. #adr(19)])
+    #points([Required checks cover formatting, compilation and unit/integration behavior. Bespoke README equality checkers, source-policy audits, gate self-tests and repository-local design checkers are removed; shared pinned Snips synchronizes README excerpts from compiled and tested examples; the imported design check remains. Documentation and conventions are reviewed manually. #adr(19)])
     #md-table(4, ([*Obligation*], [*Command*], [*Cadence*], [*Enforcement and retained evidence*],
       [Shared formatting], [`nix flake check`], [direct local command, mandatory CI], [mechanism; formatter diagnostics],
       [Design integrity], [`nix run .#design-gate-check -- docs/design .`], [design changes, mandatory CI], [imported checker],

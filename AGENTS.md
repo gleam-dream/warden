@@ -25,7 +25,7 @@
 - OpenID plans: `WARDEN_CONFORMANCE_POLICY=regression scripts/conformance-check basic,formpost,config,refresh,logout`.
 - `scripts/postgres-check` and `scripts/postgres-negative` run the PostgreSQL adapter against a temporary cluster. `scripts/relay-recipe` builds and runs the separate Relay integration consumer.
 - `scripts/benchmark` produces observations only (ADR 0017).
-- Usage lives as compiled examples in `consumer/src/warden_reference/usage/`, run by `consumer/test/usage_test.gleam` inside `scripts/check`. README consistency is reviewed manually.
+- Usage lives as compiled examples in `consumer/src/warden_reference/usage/`, run by `consumer/test/usage_test.gleam` inside `scripts/check`. README code excerpts are synchronized from tested sources with Snips.
 - After design changes, render and run the imported design check.
 
 ## References
@@ -68,3 +68,12 @@ estimates context. Review documentation and conventions manually.
 conformance review before the layer is treated as current.
 
 <!-- agent-skills:end -->
+
+## README snippets
+
+Keep README Gleam examples in compiled example or consumer source. Use named
+`snips-start` / `snips-end` regions (or include a whole example module), and retain
+Prettier ignore ranges around generated README blocks. Format the source first,
+then run `nix run .#snips -- --commands deny README.md integrations/warden_postgres/README.md`. CI runs
+`nix run .#snips -- --check --commands deny README.md integrations/warden_postgres/README.md` using the shared pinned
+package. Snips checks synchronization; existing example tests check behavior.

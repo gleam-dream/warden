@@ -1,3 +1,4 @@
+// snips-start: relay-verifier
 import gleam/option.{type Option, None, Some}
 import relay/authorization.{type Attestation, type Verifier}
 import warden
@@ -60,3 +61,4 @@ pub fn introspection_verifier(client: warden.Client) -> Verifier(Principal) {
       Error(authorization.VerifierUnavailable)
   }
 }
+// snips-end: relay-verifier

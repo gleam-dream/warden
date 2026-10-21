@@ -15,7 +15,7 @@ import warden/config
 import warden/resource
 import warden/testing
 
-// docs:begin resource-server
+// snips-start: resource-server
 pub fn start(
   issuer: String,
 ) -> Result(#(warden.Client, resource.Validator), warden.StartError) {
@@ -38,7 +38,7 @@ pub fn status(validator: resource.Validator, bearer: String) -> Int {
   }
 }
 
-// docs:end resource-server
+// snips-end: resource-server
 
 /// Local validation accepts and refuses by audience and scope; introspection
 /// refuses a revoked access token at once, while a local validator accepts it

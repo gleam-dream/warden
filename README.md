@@ -28,8 +28,9 @@ Register the callback address with your issuer and supply the client secret from
 trusted configuration. Create one client when the application starts and reuse
 it across requests.
 
-<!-- example: consumer/src/warden_reference/usage/login.gleam login -->
+<!-- prettier-ignore-start -->
 
+<!-- snips: consumer/src/warden_reference/usage/login.gleam#login -->
 ```gleam
 import gleam/http/request.{type Request}
 import gleam/http/response.{type Response}
@@ -102,6 +103,8 @@ pub fn logout(
 }
 ```
 
+<!-- prettier-ignore-end -->
+
 A runnable version lives in
 [`usage/login.gleam`](consumer/src/warden_reference/usage/login.gleam), and
 [`common_path_test`](consumer/test/warden_reference_test.gleam) runs its path
@@ -146,8 +149,9 @@ are in [`protect.gleam`](consumer/src/warden_reference/protect.gleam).
 
 Source: [`usage/supervision.gleam`](consumer/src/warden_reference/usage/supervision.gleam).
 
-<!-- example: consumer/src/warden_reference/usage/supervision.gleam supervision -->
+<!-- prettier-ignore-start -->
 
+<!-- snips: consumer/src/warden_reference/usage/supervision.gleam#supervision -->
 ```gleam
 pub fn under_supervision(
   configuration: config.Config,
@@ -159,7 +163,10 @@ pub fn under_supervision(
   |> result.map(fn(started) { #(client, started) })
   |> result.replace_error("the supervision tree did not start")
 }
+
 ```
+
+<!-- prettier-ignore-end -->
 
 `warden.new` allocates stable names once, so the handle stays valid after process
 replacement. A supervised client discovers in the background and answers
@@ -170,8 +177,9 @@ through its parent.
 
 Source: [`usage/durable_store.gleam`](consumer/src/warden_reference/usage/durable_store.gleam).
 
-<!-- example: consumer/src/warden_reference/usage/durable_store.gleam durable-store -->
+<!-- prettier-ignore-start -->
 
+<!-- snips: consumer/src/warden_reference/usage/durable_store.gleam#durable-store -->
 ```gleam
 /// An adapter is three functions. A database table replaces the stand-in.
 pub fn adapter(table: store.Store) -> store.Store {
@@ -195,7 +203,10 @@ pub fn with_durable_store(
   |> config.with_transaction_store(records)
   |> config.with_sealing_key(key)
 }
+
 ```
+
+<!-- prettier-ignore-end -->
 
 Records are sealed with AES-256-GCM, so the database holds no token, verifier or
 session reference. The store port has one conditional write with the conditions
@@ -208,8 +219,9 @@ second node restoring the first node's session. Check an adapter with
 
 Source: [`usage/callback_addresses.gleam`](consumer/src/warden_reference/usage/callback_addresses.gleam).
 
-<!-- example: consumer/src/warden_reference/usage/callback_addresses.gleam callback-addresses -->
+<!-- prettier-ignore-start -->
 
+<!-- snips: consumer/src/warden_reference/usage/callback_addresses.gleam#callback-addresses -->
 ```gleam
 const admin_callback = "https://admin.example.com/callback"
 
@@ -230,7 +242,10 @@ pub fn admin_login(
     )
   warden.begin_login(client, req, options)
 }
+
 ```
+
+<!-- prettier-ignore-end -->
 
 A login picks one registered address by exact match; any near miss fails with
 `InvalidLoginOption(RedirectUriNotAllowed)`. Register every allowed address with
@@ -240,8 +255,9 @@ the provider.
 
 Source: [`usage/test_provider.gleam`](consumer/src/warden_reference/usage/test_provider.gleam).
 
-<!-- example: consumer/src/warden_reference/usage/test_provider.gleam test-provider -->
+<!-- prettier-ignore-start -->
 
+<!-- snips: consumer/src/warden_reference/usage/test_provider.gleam#test-provider -->
 ```gleam
 pub fn sign_in_then_refuse() -> Nil {
   let assert Ok(provider) =
@@ -263,7 +279,10 @@ pub fn sign_in_then_refuse() -> Nil {
   warden.stop(client)
   testing.stop_provider(provider)
 }
+
 ```
+
+<!-- prettier-ignore-end -->
 
 `warden/testing` runs a scripted provider over HTTPS on loopback with its own
 PKI. A test browser follows the application's own `/login` redirect, trusting
@@ -279,8 +298,9 @@ Source: [`usage/resource_server.gleam`](consumer/src/warden_reference/usage/reso
 which also runs local validation, scope and audience refusals, and introspection
 against revocation.
 
-<!-- example: consumer/src/warden_reference/usage/resource_server.gleam resource-server -->
+<!-- prettier-ignore-start -->
 
+<!-- snips: consumer/src/warden_reference/usage/resource_server.gleam#resource-server -->
 ```gleam
 pub fn start(
   issuer: String,
@@ -303,7 +323,10 @@ pub fn status(validator: resource.Validator, bearer: String) -> Int {
       }
   }
 }
+
 ```
+
+<!-- prettier-ignore-end -->
 
 [`warden/resource`](src/warden/resource.gleam) validates RFC 9068 JWT access tokens
 with the issuer's cached keys. [`warden.introspect`](src/warden.gleam) checks the
@@ -313,11 +336,11 @@ scope and availability failures.
 
 The following Relay recipes leave required-scope admission to Relay and map
 Warden's checked audience and failure evidence into caller-owned types.
-`scripts/relay-recipe` compiles this block and compares it with the resource
-module documentation.
+`scripts/relay-recipe` builds and runs the separate Relay consumer.
 
-<!-- relay-recipe -->
+<!-- prettier-ignore-start -->
 
+<!-- snips: relay_consumer/src/recipe.gleam#relay-verifier -->
 ```gleam
 import gleam/option.{type Option, None, Some}
 import relay/authorization.{type Attestation, type Verifier}
@@ -382,6 +405,8 @@ pub fn introspection_verifier(client: warden.Client) -> Verifier(Principal) {
   }
 }
 ```
+
+<!-- prettier-ignore-end -->
 
 ## Oracles and benchmarks
 

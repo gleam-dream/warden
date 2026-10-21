@@ -16,7 +16,7 @@ import warden
 import warden/config
 import warden/testing
 
-// docs:begin supervision
+// snips-start: supervision
 pub fn under_supervision(
   configuration: config.Config,
 ) -> Result(#(warden.Client, actor.Started(supervisor.Supervisor)), String) {
@@ -28,7 +28,7 @@ pub fn under_supervision(
   |> result.replace_error("the supervision tree did not start")
 }
 
-// docs:end supervision
+// snips-end: supervision
 
 /// The Erlang exit reason `shutdown`.
 type ExitReason {

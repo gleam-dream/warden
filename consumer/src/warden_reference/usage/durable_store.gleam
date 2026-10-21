@@ -17,7 +17,7 @@ import warden/config
 import warden/store
 import warden/testing
 
-// docs:begin durable-store
+// snips-start: durable-store
 /// An adapter is three functions. A database table replaces the stand-in.
 pub fn adapter(table: store.Store) -> store.Store {
   store.new(
@@ -41,7 +41,7 @@ pub fn with_durable_store(
   |> config.with_sealing_key(key)
 }
 
-// docs:end durable-store
+// snips-end: durable-store
 
 /// The conditional write: `Absent` inserts, `AtVersion` replaces, and
 /// `AtVersionBefore` replaces only before a validity deadline. A refusal
