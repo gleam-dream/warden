@@ -28,4 +28,4 @@ for port in 18080 18081 18082; do
     i=$((i + 1)); [ "$i" -gt 100 ] && { cat "$ROOT/build/reference-$port.log" >&2; exit 1; }; sleep 0.2
   done
 done
-node browser/journey.mjs
+(cd browser && npx --no-install playwright test)
