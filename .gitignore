@@ -4,6 +4,5 @@ erl_crash.dump
 .direnv/
 node_modules/
 test/conformance/mongo/
-relay_consumer/src/recipe.gleam
 .render/
 **/.render/

@@ -1,8 +1,6 @@
 //// Usage: sign a user in, call an API with the token, sign out.
 ////
-//// The README shows this region verbatim (`scripts/check-doc-examples`
-//// compares them), and `common_path_test` runs the path against the local
-//// test provider, so the documentation cannot drift from the API.
+//// `common_path_test` exercises this path against the local test provider.
 
 // docs:begin login
 import gleam/http/request.{type Request}

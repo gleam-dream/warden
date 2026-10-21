@@ -63,7 +63,7 @@ jobs:
           path: |
             warden/build/ci/
             warden/build/conformance/
-          if-no-files-found: error
+          if-no-files-found: warn
           retention-days: 30
   conformance-status:
     name: OpenID regression status

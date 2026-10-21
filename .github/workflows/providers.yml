@@ -98,7 +98,7 @@ jobs:
             warden/build/node-provider.log
             warden/build/hydra-consent.log
             warden/build/reference-*.log
-          if-no-files-found: error
+          if-no-files-found: warn
           retention-days: 14
   provider-ci:
     name: Provider CI

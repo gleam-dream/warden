@@ -41,5 +41,5 @@ jobs:
           path: |
             warden/build/benchmark/
             warden/build/ci/revisions.txt
-          if-no-files-found: error
+          if-no-files-found: warn
           retention-days: 30

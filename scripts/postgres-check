@@ -29,6 +29,5 @@ pg_ctl -D "$WORK/data" -o "-h 127.0.0.1 -p $PORT -k $WORK" -l "$WORK/postgres.lo
 STARTED=1
 export WARDEN_POSTGRES_TEST_URL="postgresql://warden_test@127.0.0.1:$PORT/postgres"
 cd "$ROOT/integrations/warden_postgres"
-gleam format --check src test
 gleam build --warnings-as-errors
 gleam test

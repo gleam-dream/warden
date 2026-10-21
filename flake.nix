@@ -78,8 +78,6 @@
             openssl
             nodejs_22
             python3
-            actionlint
-            shellcheck
             curl
             lsof
             git

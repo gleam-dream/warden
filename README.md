@@ -102,13 +102,12 @@ pub fn logout(
 }
 ```
 
-This block is compiled in
+A runnable version lives in
 [`usage/login.gleam`](consumer/src/warden_reference/usage/login.gleam), and
 [`common_path_test`](consumer/test/warden_reference_test.gleam) runs its path
 against the local test provider. The same directory holds one runnable example per
 topic below, each run by [`usage_test`](consumer/test/usage_test.gleam).
-`scripts/check-doc-examples.py` fails the gate when a block here differs from its
-compiled source. The [reference application](consumer/) also supplies browser
+The [reference application](consumer/) also supplies browser
 routes, application session storage and route protection.
 
 After the application stops admitting requests, call `warden.stop(client)` for

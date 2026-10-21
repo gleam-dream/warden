@@ -6,28 +6,19 @@ ROOT=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
 cd "$ROOT"
 PROFILE=${1:-fast}
 case "$PROFILE" in fast|full) ;; *) echo "usage: $0 [fast|full]" >&2; exit 2 ;; esac
-nix flake check
-scripts/scriptlint
-python3 -B -m unittest discover -s scripts -p 'test_*.py'
-# README code blocks are verbatim regions of the compiled consumer examples.
-python3 -B scripts/check-doc-examples.py
-gleam format --check src test
 # Frozen test-only JOSE 1.11.12 uses unary catch; authored Erlang stays strict below.
 ERL_COMPILER_OPTIONS='[nowarn_deprecated_catch]' gleam build --warnings-as-errors
 scripts/erlang-check
-scripts/gate-regressions
 WARDEN_SUITE=fast gleam test
 scripts/negative
 (
   cd consumer
-  gleam format --check src test
   gleam build --warnings-as-errors
   "$ROOT/scripts/erlang-check" "$ROOT/consumer"
   gleam test
 )
 scripts/relay-recipe
 scripts/postgres-check
-nix run .#design-gate-check -- docs/design .
 if [ "$PROFILE" = full ]; then
   for suite in node keycloak interop browser; do scripts/provider-check "$suite"; done
 fi

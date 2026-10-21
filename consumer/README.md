@@ -15,8 +15,7 @@ and route protection, and holds one runnable example per usage topic.
 | Application decisions around Warden's evidence | `src/warden_reference/usage/responsibilities.gleam`   |
 
 `test/usage_test.gleam` runs every example. The README at the repository root shows
-the marked regions verbatim, and `scripts/check-doc-examples.py` fails when a block
-and its source differ. `src/warden_reference/web.gleam` holds the browser routes and
+related usage snippets, whose consistency is reviewed manually. `src/warden_reference/web.gleam` holds the browser routes and
 `protect.gleam` the route protection; `test/warden_reference_test.gleam` runs the
 common login path and `browser/` holds the browser reproduction.
 

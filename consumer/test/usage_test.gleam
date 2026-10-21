@@ -1,6 +1,4 @@
-//// Every usage example runs here, against the local test provider, so the
-//// README and the examples cannot drift from the library. The README shows
-//// the regions the examples mark (`scripts/check-doc-examples`).
+//// Every usage example runs here against the local test provider.
 
 import warden_reference/usage/callback_addresses
 import warden_reference/usage/durable_store
