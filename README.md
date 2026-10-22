@@ -1,32 +1,51 @@
-# warden
+# Warden
 
-Warden signs users in with OpenID Connect, obtains OAuth 2.0 tokens and validates
-JWT access tokens for Gleam applications on Erlang/OTP. It manages discovery,
-signing keys and user-token storage; applications own their session cookies and
-permission checks.
+OIDC login, OAuth 2.0 tokens and JWT access-token validation for Gleam on
+Erlang/OTP. Warden manages provider discovery, signing keys and token custody;
+your application owns its accounts, session cookies and permission checks.
+
+This checkout is unreleased and pre-production. Production use requires the
+[release conditions](docs/design/design-layer.pdf) and independent security review of
+Warden-owned code. Warden is not certified.
+
+## Capabilities
+
+- OIDC authorization-code login with S256 PKCE and query or form-post callbacks.
+- Checked identity and application-decoded claims, keyed by issuer and subject.
+- Opaque user sessions, near-expiry refresh and shared concurrent refreshes.
+- Logout with separate local-custody, revocation and provider-redirect outcomes.
+- Confidential service clients for client credentials, userinfo and introspection.
+- Local RFC 9068 JWT access-token validation with audience and scope policy.
+- Supervised discovery and signing-key caches with restart-stable client handles.
+- Optional sealed durable custody through a conditional-record store, including
+  the separate [PostgreSQL adapter](integrations/warden_postgres/README.md).
+
+## When to use Warden
+
+Use it to sign users into a Gleam web application through an existing identity
+provider, obtain OAuth tokens for a service, or protect an API with JWT access
+tokens. It does not supply an authorization server or your application's browser
+session and authorization policy.
 
 ## Installation
 
-This checkout is unreleased and pre-production. It requires Gleam 1.18 or later
-and uses Git dependencies on the `main` branches of HTTP Gun and Sinal, locked in `manifest.toml`. Gleam fetches them
-automatically. For local development, add a Warden checkout to your application's
-`gleam.toml` (adjust the path for your directory layout):
+Requires Gleam 1.18 or later and the Erlang target. Add Warden to your application's
+`gleam.toml`; Gleam fetches its Git dependencies without sibling checkouts:
 
 ```toml
 [dependencies]
-warden = { path = "../warden" }
+warden = { git = "https://github.com/gleam-dream/warden.git", ref = "main" }
 ```
 
-Production use requires the release conditions in the [design](docs/design/design.typ)
-and independent security review of Warden-owned code. Warden is not certified;
-the design's validation section states what the retained checks
-establish.
+Commit `manifest.toml` to retain the resolved revisions. The
+[reference application](consumer/) includes the HTTP dependencies and route
+integration used below.
 
 ## Sign a user in, then call an API
 
-Register the callback address with your issuer and supply the client secret from
-trusted configuration. Create one client when the application starts and reuse
-it across requests.
+Register the callback address with your issuer and load the client secret from
+trusted configuration. This excerpt defines startup, login/callback handlers,
+API authorization and logout:
 
 <!-- prettier-ignore-start -->
 
@@ -105,198 +124,36 @@ pub fn logout(
 
 <!-- prettier-ignore-end -->
 
-A runnable version lives in
-[`usage/login.gleam`](consumer/src/warden_reference/usage/login.gleam), and
-[`common_path_test`](consumer/test/warden_reference_test.gleam) runs its path
-against the local test provider. The same directory holds one runnable example per
-topic below, each run by [`usage_test`](consumer/test/usage_test.gleam).
-The [reference application](consumer/) also supplies browser
-routes, application session storage and route protection.
+The [complete module](consumer/src/warden_reference/usage/login.gleam) compiles in
+the reference consumer. Its [common-path test](consumer/test/warden_reference_test.gleam)
+exercises the equivalent login, token and logout flow against a local test provider.
+The application stores the session reference in its protected browser session.
 
-After the application stops admitting requests, call `warden.stop(client)` for
-this manually started client. It waits up to five seconds for supervisor exit;
-its return does not confirm every worker or external effect has finished. Keep
-captured resources alive for the completion boundary your application needs (see the design's "Application responsibilities" section).
+## How it works
 
-## Defaults and failures
-
-Sessions and pending logins use memory by default, so a restart loses sessions.
-A session lasts at most 12 hours with a one-hour idle lifetime. `access_token`
-refreshes within 30 seconds of expiry, and concurrent requests share one refresh.
-Provider requests use verified HTTPS, public destinations and a ten-second
-deadline. Login requires advertised S256 PKCE and exact issuer, audience, nonce
-and callback matching. Every default and its setter is listed in the design's
-"Public defaults and setters" table in [`docs/design/design.typ`](docs/design/design.typ).
-
-`login_error_action` and `session_error_action` return the closed caller actions
-`Reauthenticate`, `RetryLater`, `Recover`, `FixConfiguration` and `RejectRequest`.
-A possibly sent authorization code or refresh token is never sent again. For
-`Recover`, keep the full error and submit its carried value to `recover_custody`
-or `recover_refresh`; recovery repeats storage publication without another
-provider exchange. Log errors through the `describe_*` functions.
-
-Keep the session reference in a protected application session, use
-`(issuer, subject)` as the identity key, and apply application permission and
-origin checks on every protected route. The design's "Application
-responsibilities" section lists the decisions the application owns, and
-[`usage/responsibilities.gleam`](consumer/src/warden_reference/usage/responsibilities.gleam)
-runs each one: the identity key, handling for every `Action`, a forced refresh
-only for a repeatable request, service-token caching and logout outcomes. The
-browser-facing protections (session cookie, same-origin check, response headers)
-are in [`protect.gleam`](consumer/src/warden_reference/protect.gleam).
-
-## Supervision
-
-Source: [`usage/supervision.gleam`](consumer/src/warden_reference/usage/supervision.gleam).
-
-<!-- prettier-ignore-start -->
-
-<!-- snips: consumer/src/warden_reference/usage/supervision.gleam#supervision -->
-```gleam
-pub fn under_supervision(
-  configuration: config.Config,
-) -> Result(#(warden.Client, actor.Started(supervisor.Supervisor)), String) {
-  let assert Ok(client) = warden.new(configuration)
-  supervisor.new(supervisor.OneForOne)
-  |> supervisor.add(warden.supervised(client))
-  |> supervisor.start
-  |> result.map(fn(started) { #(client, started) })
-  |> result.replace_error("the supervision tree did not start")
-}
-
+```mermaid
+flowchart LR
+  App["Application routes and policy"] --> Client["Warden client handle"]
+  Supervisor["Application supervisor"] --> Runtime["Warden provider and cache processes"]
+  Client --> Runtime
+  Runtime --> Issuer["OIDC / OAuth issuer"]
+  Runtime --> Store["Memory or sealed record store"]
 ```
 
-<!-- prettier-ignore-end -->
+`Config` describes the client role. `warden.new` allocates stable names;
+`warden.start` starts a manually owned client, while `warden.supervised` installs
+it under your supervisor. Background discovery can return `ProviderNotReady`
+until metadata and keys arrive. A `Session` is an opaque custody reference, not
+an application session or permission grant.
 
-`warden.new` allocates stable names once, so the handle stays valid after process
-replacement. A supervised client discovers in the background and answers
-`ProviderNotReady` until fresh metadata and keys arrive. Stop a supervised client
-through its parent.
-
-## Durable sessions
-
-Source: [`usage/durable_store.gleam`](consumer/src/warden_reference/usage/durable_store.gleam).
-
-<!-- prettier-ignore-start -->
-
-<!-- snips: consumer/src/warden_reference/usage/durable_store.gleam#durable-store -->
-```gleam
-/// An adapter is three functions. A database table replaces the stand-in.
-pub fn adapter(table: store.Store) -> store.Store {
-  store.new(
-    get: fn(key) { store.get(table, key) },
-    put: fn(record, condition) { store.put(table, record, condition) },
-    delete_expired: fn(now) { store.delete_expired(table, now) },
-  )
-}
-
-/// Durable custody and login storage, sealed with a 32-byte key from a
-/// secret manager.
-pub fn with_durable_store(
-  configuration: config.Config,
-  records: store.Store,
-  sealing_key_bytes: BitArray,
-) -> config.Config {
-  let assert Ok(key) = config.sealing_key(sealing_key_bytes)
-  configuration
-  |> config.with_custody_store(records)
-  |> config.with_transaction_store(records)
-  |> config.with_sealing_key(key)
-}
-
-```
-
-<!-- prettier-ignore-end -->
-
-Records are sealed with AES-256-GCM, so the database holds no token, verifier or
-session reference. The store port has one conditional write with the conditions
-`Absent`, `AtVersion` and `AtVersionBefore`; the example runs each outcome and a
-second node restoring the first node's session. Check an adapter with
-`warden/testing.check_store`; the design's custody section states the contract.
-[`warden_postgres`](integrations/warden_postgres/README.md) is a ready adapter.
-
-## Several callback addresses
-
-Source: [`usage/callback_addresses.gleam`](consumer/src/warden_reference/usage/callback_addresses.gleam).
-
-<!-- prettier-ignore-start -->
-
-<!-- snips: consumer/src/warden_reference/usage/callback_addresses.gleam#callback-addresses -->
-```gleam
-const admin_callback = "https://admin.example.com/callback"
-
-pub fn allow_admin_callback(configuration: config.Config) -> config.Config {
-  configuration
-  |> config.with_allowed_redirect_uris([admin_callback])
-}
-
-/// GET /admin/login
-pub fn admin_login(
-  client: warden.Client,
-  req: request.Request(a),
-) -> Result(warden.LoginRedirect, warden.LoginError) {
-  let options =
-    warden.LoginOptions(
-      ..warden.default_login(),
-      redirect_uri: Some(admin_callback),
-    )
-  warden.begin_login(client, req, options)
-}
-
-```
-
-<!-- prettier-ignore-end -->
-
-A login picks one registered address by exact match; any near miss fails with
-`InvalidLoginOption(RedirectUriNotAllowed)`. Register every allowed address with
-the provider.
-
-## Testing with a local provider
-
-Source: [`usage/test_provider.gleam`](consumer/src/warden_reference/usage/test_provider.gleam).
-
-<!-- prettier-ignore-start -->
-
-<!-- snips: consumer/src/warden_reference/usage/test_provider.gleam#test-provider -->
-```gleam
-pub fn sign_in_then_refuse() -> Nil {
-  let assert Ok(provider) =
-    testing.start_provider(
-      testing.provider_options() |> testing.with_login(testing.SignIn("ada")),
-    )
-  let assert Ok(client) =
-    warden.new(testing.config(provider, "https://app.test/callback"))
-  let assert Ok(Nil) = warden.start(client)
-  // /login -> provider /authorize (signs "ada" in) -> /callback?code=...
-  let assert Ok(redirect) =
-    warden.begin_login(client, request.new(), warden.default_login())
-  let assert Ok(callback) =
-    testing.authorize(provider, redirect, subject: "ada")
-  let assert Ok(session) = warden.complete_login(client, callback)
-  assert warden.subject(warden.session_identity(session)) == "ada"
-  // The next login at the provider's page is cancelled.
-  testing.set_login(provider, testing.Refuse("access_denied"))
-  warden.stop(client)
-  testing.stop_provider(provider)
-}
-
-```
-
-<!-- prettier-ignore-end -->
-
-`warden/testing` runs a scripted provider over HTTPS on loopback with its own
-PKI. A test browser follows the application's own `/login` redirect, trusting
-`testing.trust_anchor_pem`, and returns to `/callback` with no test hook in the
-application. `with_granted_scopes` and `with_email_claims` script per-subject
-scopes and email assertions. Unit tests that hold a `LoginRedirect` call
-`testing.authorize` and skip HTTP. The provider also mints and revokes tokens,
-skews its clock, rotates its key and counts requests.
+Use the [supervision example](consumer/src/warden_reference/usage/supervision.gleam)
+for a long-lived service. Stop supervised clients through their parent; manually
+started clients need `warden.stop` after the application stops admitting work.
 
 ## Resource servers
 
-Source: [`usage/resource_server.gleam`](consumer/src/warden_reference/usage/resource_server.gleam),
-which also runs local validation, scope and audience refusals, and introspection
-against revocation.
+Use the separate resource-server role to check JWT access tokens against cached
+issuer keys. This example maps verification outcomes to HTTP status codes:
 
 <!-- prettier-ignore-start -->
 
@@ -328,110 +185,35 @@ pub fn status(validator: resource.Validator, bearer: String) -> Int {
 
 <!-- prettier-ignore-end -->
 
-[`warden/resource`](src/warden/resource.gleam) validates RFC 9068 JWT access tokens
-with the issuer's cached keys. [`warden.introspect`](src/warden.gleam) checks the
-provider's current token state for opaque tokens or immediate revocation. The
-design's "Resource validation and provider operations" section states audience,
-scope and availability failures.
+[Local validation](src/warden/resource.gleam) does not observe immediate token
+revocation. A suitably authenticated service client can instead use
+`warden.introspect` to ask the provider for current token state. Resource-server
+configuration alone supplies no introspection credentials.
 
-The following Relay recipes leave required-scope admission to Relay and map
-Warden's checked audience and failure evidence into caller-owned types.
-`scripts/relay-recipe` builds and runs the separate Relay consumer.
+## Operational notes
 
-<!-- prettier-ignore-start -->
+- Use `(issuer, subject)` as identity, not email. Protect application session
+  cookies and apply CSRF/origin and permission checks at your routes.
+- Memory storage loses sessions on restart. Durable custody needs a protected
+  32-byte sealing key, conditional writes and rollback protection; the application
+  owns migrations, pool lifetime, capacity and backup policy.
+- Do not blindly resend a possibly consumed authorization code or refresh token.
+  Branch on `login_error_action` or `session_error_action`; keep errors carrying
+  `Recover` evidence for `recover_custody` or `recover_refresh`.
+- Provider traffic uses verified HTTPS and public destinations by default.
+  Login checks issuer, audience, nonce and callback matching. Register every
+  allowed callback address with the provider.
+- `warden.stop` and the login deadline do not prove that every worker or external
+  effect has finished. Keep borrowed resources alive for the required completion boundary.
 
-<!-- snips: relay_consumer/src/recipe.gleam#relay-verifier -->
-```gleam
-import gleam/option.{type Option, None, Some}
-import relay/authorization.{type Attestation, type Verifier}
-import warden
-import warden/resource
+## Examples and reference
 
-pub type Principal {
-  Principal(subject: String, client_id: Option(String), scopes: List(String))
-}
-
-/// Local RFC 9068 validation: no provider request per token. A token for
-/// another resource gets Relay's "issued for another resource" challenge.
-pub fn jwt_verifier(validator: resource.Validator) -> Verifier(Principal) {
-  let verify =
-    resource.verifier(
-      validator,
-      authorization.token_value,
-      attest,
-      on_error: refuse,
-    )
-  use token, _correlation <- authorization.verifier("warden-jwt")
-  verify(token)
-}
-
-fn refuse(kind: resource.ErrorKind) -> authorization.VerificationError {
-  case kind {
-    resource.Rejected | resource.Forbidden -> authorization.BearerRejected
-    resource.WrongAudience -> authorization.IssuedForAnotherResource
-    resource.Unavailable -> authorization.VerifierUnavailable
-  }
-}
-
-fn attest(claims: resource.AccessClaims) -> Attestation(Principal) {
-  let scopes = resource.scopes(claims)
-  authorization.attestation(
-    Principal(resource.subject(claims), resource.client_id(claims), scopes),
-    resource.audiences(claims),
-    scopes,
-  )
-}
-
-/// RFC 7662 introspection: one provider request per token, so a revoked
-/// token is refused at once. The request's correlation tags the provider
-/// call, so it joins the MCP request in telemetry.
-pub fn introspection_verifier(client: warden.Client) -> Verifier(Principal) {
-  use token, correlation <- authorization.verifier("warden-introspection")
-  let client = warden.with_correlation(client, correlation)
-  case warden.introspect(client, authorization.token_value(token)) {
-    Ok(warden.ActiveToken(warden.TokenInfo(subject: Some(subject), ..) as info)) ->
-      Ok(authorization.attestation(
-        Principal(subject, info.client_id, info.scopes),
-        info.audiences,
-        info.scopes,
-      ))
-    Ok(warden.ActiveToken(warden.TokenInfo(subject: None, ..))) ->
-      Error(authorization.VerifierUnmapped)
-    Ok(warden.InactiveToken) | Error(warden.IntrospectionTokenTooLarge) ->
-      Error(authorization.BearerRejected)
-    Error(warden.IntrospectionNotSupported)
-    | Error(warden.IntrospectionFailed(_)) ->
-      Error(authorization.VerifierUnavailable)
-  }
-}
-```
-
-<!-- prettier-ignore-end -->
-
-## Oracles and benchmarks
-
-[`docs/ORACLE.md`](docs/ORACLE.md) names the independent references Warden is
-compared with (OpenID Foundation RP conformance suite, Keycloak, node-oidc-provider,
-test-only oidcc), their pinned revisions, what each comparison establishes and how
-to reproduce it. [`docs/BENCHMARKS.md`](docs/BENCHMARKS.md) retains local
-measurements of provider cache cost, with their workloads, revisions and limits.
-The two documents link to each other; neither result certifies a release.
-
-## Development and design
-
-```sh
-nix develop -c scripts/check
-```
-
-The gate commands, provider suites and fresh-build sequence are in
-[`AGENTS.md`](AGENTS.md). The [native design](docs/design/design.typ),
-[vocabulary](docs/design/CONTEXT.typ) and [coverage map](docs/COVERAGE.md)
-describe the full capability scope and unresolved requirements. The
-[ADRs](docs/adr) record rationale and history.
-
-## Optional PostgreSQL storage
-
-[`warden_postgres`](integrations/warden_postgres/README.md) supplies the public
-conditional-record store using a caller-owned Pog pool. Warden core does not
-depend on it. Applications own schema initialization, pool lifetime, sealing keys,
-capacity and backup protection; the adapter owns atomic writes.
+- [Usage modules](consumer/src/warden_reference/usage/): supervision, durable stores,
+  callback addresses, resource servers and a local HTTPS test provider.
+- [Relay integration](relay_consumer/src/recipe.gleam): JWT and introspection verifiers.
+- [PostgreSQL storage](integrations/warden_postgres/README.md): optional adapter;
+  the core does not depend on it.
+- [Design](docs/design/design-layer.pdf): protocol scope, defaults and unresolved requirements.
+- [Oracle](docs/ORACLE.md) and [measurements](docs/BENCHMARKS.md): retained evidence
+  with its revisions and limits, not a release certification or current performance promise.
+- [Development commands](AGENTS.md): local checks, provider suites and browser tests.
